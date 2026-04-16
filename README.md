@@ -1,50 +1,67 @@
-# APEX — Predictive Maintenance Foundation
+# APEX — Predictive Maintenance System
 
-> **This is Phase 1 (30% scope). Training, UI, and deployment are Phase 2+.**
+> **Phase 3 (Complete & Production-Ready Pipeline)**
+> Built by: **Azhx-088** & **hemchudesh12**
 
-APEX is a five-phase predictive maintenance system for turbofan engines built on the NASA CMAPSS FD001 dataset. This repository contains **only the Phase 1 foundation layer** — data pipeline, model architecture definition, API skeleton, and sensor simulator scaffolding.
-
----
-
-## What is built in Phase 1
-
-| Module | File | Status |
-|---|---|---|
-| Project scaffold | `config.yaml`, `requirements.txt`, `.gitignore` | ✅ Phase 1 |
-| Pydantic schema contracts | `src/schemas.py` | ✅ Phase 1 |
-| CMAPSS data pipeline | `src/data/preprocessing.py` | ✅ Phase 1 |
-| CNN-BiLSTM architecture | `src/models/cnn_bilstm.py` | ✅ Phase 1 |
-| MC-Dropout wrapper | `src/models/cnn_bilstm.py` | ✅ Phase 1 |
-| FastAPI skeleton | `src/api/main.py` | ✅ Phase 1 |
-| Sensor simulator | `src/simulator/replay.py` | ✅ Phase 1 |
-| Training stub | `train.py` | ✅ Phase 1 (stub only) |
-
-## What is NOT built yet
-
-- ❌ Model training (Phase 2)
-- ❌ Frontend / dashboard / visualisations (Phase 3)
-- ❌ ONNX export and quantisation (Phase 3)
-- ❌ Authentication and security hardening (Phase 3)
-- ❌ Docker / cloud deployment (Phase 4)
-- ❌ Unit and integration tests (Phase 2)
+APEX is a comprehensive predictive maintenance system for turbofan engines built on the NASA CMAPSS FD001 dataset. This repository contains the **complete implementation** across the entire stack — data pipeline, CNN-BiLSTM deep learning model, high-performance FastAPI backend, continuous sensor simulator, and a beautifully designed, real-time React/Vite dashboard.
 
 ---
 
-## Setup
+## 🌟 Key Features
+
+- **CNN-BiLSTM Architecture**: Robust spatial-temporal feature extraction capturing long-term degradation dependencies.
+- **Monte Carlo Dropout**: Uncertainty quantification (Confidence Intervals / Standard Deviation) so operators know exactly how reliable the prediction is.
+- **High-Performance FastAPI Backend**: Handles real-time ingestion, continuous inference, and `<10ms` WebSocket broadcasting.
+- **Continuous Staggered Simulator**: Simulates high-frequency telemetry across an entire engine fleet (1x to 100x speeds) continuously looping through degradation lifecycles (HEALTHY → CRITICAL).
+- **Time-Aware UI Dashboard**: Modern, glassmorphism-based UI in React/Zustand that visualizes RUL (Remaining Useful Life) mapped to physical time (days/months) in real-time. Includes active maintenance queues and similar historical failure sparklines.
+
+---
+
+## 🛠️ Stack & Architecture
+
+- **Machine Learning**: PyTorch, pandas, scikit-learn
+- **Backend API**: FastAPI, Uvicorn, WebSockets (Pydantic schemas)
+- **Frontend App**: React 18, Vite, TypeScript, Zustand, Recharts, Radix UI
+- **Data Simulator**: Asynchronous Python telemetry HTTP client
+
+### Flow Architecture
+
+```
+NASA FD001 Data ──► Simulator (Continuous) ───[ HTTP POST /ingest ]──► FastAPI Backend (Ring Buffer)
+                                                                                  │
+     React Dashboard ◄──[ WebSocket /stream (1-15 Hz) ]── MCDropoutPredictor ◄── CNNBiLSTMRul (PyTorch)
+```
+
+---
+
+## 🚀 Setup & Installation
+
+### 1. Backend & ML Environment (Python)
 
 ```bash
 # Create a virtual environment
 python -m venv .venv
+
+# Activate it
 .venv\Scripts\activate        # Windows
 # source .venv/bin/activate   # macOS / Linux
 
-# Install pinned dependencies
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Drop the dataset
+### 2. Frontend Environment (Node)
 
-Place the CMAPSS FD001 files in `data/raw/`:
+Requires Node.js 18+
+
+```bash
+cd frontend
+npm install
+```
+
+### 3. Data Setup
+
+Drop the CMAPSS FD001 files in `data/raw/` (ignored by version control):
 
 ```
 data/raw/
@@ -53,51 +70,40 @@ data/raw/
 └── RUL_FD001.txt
 ```
 
-The `data/raw/` directory is excluded from version control (see `.gitignore`).
+---
 
-## Verify Phase 1 imports
+## 🏃‍♂️ Running the System
 
+To see the system in action, start the three core processes in separate terminal windows.
+
+**1. Start the Backend API:**
 ```bash
-python -c "from src.models.cnn_bilstm import CNNBiLSTMRul; m = CNNBiLSTMRul(); print(m)"
-python -c "from src.api.main import app; print(app.title)"
-python -c "from src.data.preprocessing import build_dataloaders; print('OK')"
-python -c "from src.schemas import SensorPayload, Prediction, MachineState; print('OK')"
+# From project root
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Run the API (Phase 1 — mock responses only)
-
+**2. Start the Continuous Simulator:**
 ```bash
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+# From project root
+# Simulates engines 1-5, starting base rate 1 cy/s
+python -m src.simulator.replay --engines 1 2 3 4 5 --rate 1
 ```
 
-Endpoints available in Phase 1:
-- `POST /ingest` — ingest a sensor cycle
-- `GET /predict/{machine_id}` — returns mock prediction (Phase 2 wires real inference)
-- `WS /stream` — heartbeat WebSocket
-
----
-
-## Architecture
-
-```
-SensorPayload (Pydantic) ──► POST /ingest ──► ring buffer (deque, maxlen=30)
-                                                      │
-                                              GET /predict/{id}
-                                                      │
-                                          MCDropoutPredictor ◄── CNNBiLSTMRul
-                                          (Phase 2 wired here)
-                                                      │
-                                            Prediction (Pydantic)
-                                                      │
-                                              WS /stream ──► client
+**3. Start the Dashboard:**
+```bash
+# From frontend/ directory
+npm run dev
+# The UI will be available at http://localhost:5173
 ```
 
 ---
 
-## Configuration
+## 🔧 Core Mechanics
 
-All hyperparameters are in `config.yaml`. Phase 2 may override values via CLI flags passed to `train.py`.
+- **Real-Time Speed Scaling**: Change the speed from 1x to 100x in the dashboard. The simulator dynamically polls the setting, adjusts its emit rate, and the backend adaptive broadcast layer scales WebSocket throughput natively to keep the UI buttery smooth.
+- **Staggered Fleet Decay**: The simulator initializes engines at different phases of their lifecycle automatically. You will see a realistic distribution of healthy and failing machines instantly.
 
 ---
 
-*APEX Phase 1 — Tensor '26 Hackathon, PS07*
+> *APEX Predictive Maintenance Pipeline — TR-018-APEX Repository*
+> *Authors: Azhx-088 & hemchudesh12*

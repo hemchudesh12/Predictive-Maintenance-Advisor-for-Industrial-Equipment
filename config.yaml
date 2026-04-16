@@ -4,11 +4,24 @@ data:
   rul_cap: 125
   drop_sensors: [1, 5, 6, 10, 16, 18, 19]
   feature_sensors: [2, 3, 4, 7, 8, 9, 11, 12, 13, 14, 15, 17, 20, 21]
+
 model:
   hidden: 64
   dropout: 0.3
   mc_samples: 50
+
 api:
   host: "0.0.0.0"
   port: 8000
   buffer_size: 30
+
+costs:
+  cost_per_failure: 250000
+  cost_per_maintenance: 12000
+  savings_per_prevention: 238000   # failure_cost - maintenance_cost
+
+email:
+  rate_limit_seconds: 60
+
+checkpoint:
+  path: "checkpoints/cnn_bilstm_fd001.pt"
