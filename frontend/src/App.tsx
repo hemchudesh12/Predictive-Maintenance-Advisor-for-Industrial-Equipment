@@ -11,7 +11,8 @@ import { EmailAlertModal } from './components/EmailAlertModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { ReconnectBanner } from './components/ReconnectBanner';
 import { ToastContainer } from './components/ToastContainer';
-import { useWebSocket } from './hooks/useWebSocket';
+import { DiagnosticPage } from './components/DiagnosticPage';
+import { useWebSocket, restorePersistedMachines } from './hooks/useWebSocket';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useApexStore } from './store/apexStore';
 
@@ -19,7 +20,7 @@ import { useApexStore } from './store/apexStore';
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 function AppContent() {
-  const { setCostConfig, connectionState, machines } = useApexStore();
+  const { setCostConfig, connectionState, machines, viewMode } = useApexStore();
 
   // Boot: fetch cost config once
   useEffect(() => {
@@ -31,6 +32,12 @@ function AppContent() {
         setCostConfig({ cost_per_failure: 250000, cost_per_maintenance: 12000, savings_per_prevention: 238000 });
       });
   }, [setCostConfig]);
+
+  // Restore last-known machine values from localStorage on page load.
+  // This shows frozen values from the previous session without starting the simulation.
+  useEffect(() => {
+    restorePersistedMachines();
+  }, []);
 
   // WebSocket connection
   useWebSocket();
@@ -52,26 +59,27 @@ function AppContent() {
             /* Empty state — simulator not running */
             <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, minHeight: 400 }}>
               <div style={{ fontSize: 48 }}>📡</div>
-              <div className="section-title" style={{ fontSize: 18 }}>Waiting for sensor data</div>
-              <div className="muted" style={{ maxWidth: 340, textAlign: 'center', lineHeight: 1.6 }}>
-                Backend is connected. Start the simulator to begin streaming predictions.
+              <div className="section-title" style={{ fontSize: 18 }}>No engine data yet</div>
+              <div className="muted" style={{ maxWidth: 360, textAlign: 'center', lineHeight: 1.6 }}>
+                Backend is connected. Click the <strong style={{ color: 'var(--accent)' }}>▶ Start Simulation</strong> button
+                in the sidebar to begin streaming live predictions.
               </div>
-              <code style={{ fontSize: 12, color: 'var(--accent)', background: 'var(--apex-surface-2)', padding: '8px 16px', borderRadius: 8, fontFamily: 'var(--font-mono)' }}>
-                python -m src.simulator.replay --engines 1 2 3 4 5 --rate 2
-              </code>
             </div>
-          ) : (
-            <>
-              {/* Hero chart */}
-              <HeroChart />
+          ) : viewMode === 'detail' ? (
+              <DiagnosticPage />
+            ) : (
+              <>
+                {/* Hero chart */}
+                <HeroChart />
 
-              {/* Two-column: similar failures + maintenance queue */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 'var(--gap-section)' }}>
-                <SimilarFailures />
-                <MaintenanceQueue />
-              </div>
-            </>
-          )}
+                {/* Two-column: similar failures + maintenance queue */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 'var(--gap-section)' }}>
+                  <SimilarFailures />
+                  <MaintenanceQueue />
+                </div>
+              </>
+            )
+          }
 
           {/* Footer */}
           <div style={{ paddingTop: 8, paddingBottom: 4, borderTop: '1px solid var(--apex-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -97,6 +97,12 @@ _email_last_sent: Dict[str, float] = {}
 # Replay control state
 _control: ControlState = ControlState(speed_factor=1.0, paused=False)
 
+# ── Simulation subprocess management ─────────────────────────────────────────
+import subprocess
+import sys
+_sim_process: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
+_sim_running: bool = False
+
 # Sensor name map for snapshot dict
 _SENSOR_NAMES = [
     "bearing_temp", "winding_temp", "motor_current", "discharge_pressure",
@@ -460,6 +466,7 @@ async def snapshot() -> dict:
         "fleet_stats": _fleet_stats().model_dump(),
         "backend_health": _backend_health().model_dump(),
         "fallback_mode": _fallback_mode,
+        "sim_running": _sim_running,
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -531,6 +538,70 @@ async def set_control(req: ControlRequest) -> ControlState:
 @app.get("/control", response_model=ControlState, summary="Get current replay speed state")
 async def get_control() -> ControlState:
     return _control
+
+
+# ── POST /simulation/start ───────────────────────────────────────────────────
+@app.post("/simulation/start", summary="Start the sensor simulator subprocess")
+async def simulation_start() -> dict:
+    """Starts the simulator as a subprocess (engines 1-5 at rate 1).
+    Safe to call even if already running — returns current state.
+    """
+    global _sim_process, _sim_running
+
+    # Kill stale process if still alive
+    if _sim_process is not None and _sim_process.poll() is None:
+        _sim_process.terminate()
+        try:
+            _sim_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _sim_process.kill()
+
+    speed = int(_control.speed_factor)
+    log.info(f"[APEX] Starting simulator subprocess at {speed}x...")
+    _sim_process = subprocess.Popen(
+        [
+            "python", "-m", "src.simulator.replay",
+            "--engines", "1", "2", "3", "4", "5",
+            "--rate", "1",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    _sim_running = True
+    log.info(f"[APEX] Simulator started (pid={_sim_process.pid})")
+    return {"sim_running": True, "pid": _sim_process.pid}
+
+
+# ── POST /simulation/stop ────────────────────────────────────────────────────
+@app.post("/simulation/stop", summary="Stop the sensor simulator subprocess")
+async def simulation_stop() -> dict:
+    """Gracefully terminates the simulator subprocess."""
+    global _sim_process, _sim_running
+    _sim_running = False
+
+    if _sim_process is None or _sim_process.poll() is not None:
+        log.info("[APEX] Simulator not running — nothing to stop.")
+        return {"sim_running": False}
+
+    log.info(f"[APEX] Stopping simulator (pid={_sim_process.pid})...")
+    _sim_process.terminate()
+    try:
+        _sim_process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _sim_process.kill()
+    _sim_process = None
+    log.info("[APEX] Simulator stopped.")
+    return {"sim_running": False}
+
+
+# ── GET /simulation/status ───────────────────────────────────────────────────
+@app.get("/simulation/status", summary="Check if simulator subprocess is running")
+async def simulation_status() -> dict:
+    alive = (
+        _sim_process is not None
+        and _sim_process.poll() is None
+    )
+    return {"sim_running": alive}
 
 
 # ── GET /health ───────────────────────────────────────────────────────────────

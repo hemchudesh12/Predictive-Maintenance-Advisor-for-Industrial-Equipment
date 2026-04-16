@@ -39,7 +39,6 @@ _FEATURE_COLS: list[str] = [
 ]
 
 # Stagger: each slot index → fraction into the lifecycle to start at
-# 5 engines → offsets 0%, 20%, 40%, 60%, 80%
 _STAGGER_OFFSETS = [0.0, 0.20, 0.40, 0.60, 0.80]
 
 # Speed polling
@@ -76,76 +75,90 @@ async def replay_engine(
     host:         str,
     base_rate:    float,
     client:       httpx.AsyncClient,
-    stagger_frac: float,     # 0.0 = start from beginning, 0.8 = start near end
+    stagger_frac: float,
 ) -> None:
     """
     Continuously stream degrading sensor data for one engine.
 
-    On the FIRST pass:  start from stagger_frac into the lifecycle.
-    On subsequent loops: always start from cycle 0 (fresh engine).
+    Speed-aware BURST mode — the KEY fix for 1x vs 100x variation:
+      1x   → advances 1 dataset row per tick  → slow degradation
+      10x  → advances ~3 dataset rows per tick
+      25x  → advances ~5 dataset rows per tick
+      100x → advances 20 dataset rows per tick → RUL drops visibly fast
 
-    This means:
-      engine_1 starts fresh       (RUL ~120,  HEALTHY)
-      engine_2 starts at 20%      (RUL ~90,   HEALTHY-MONITOR)
-      engine_3 starts at 40%      (RUL ~60,   MONITOR)
-      engine_4 starts at 60%      (RUL ~35,   WARNING)
-      engine_5 starts at 80%      (RUL ~10,   CRITICAL)
+    This ensures that switching from 1x to 100x immediately produces
+    DIFFERENT sensor readings (deeper in the degradation curve), so the
+    model outputs a genuinely different RUL value.
     """
-    machine_id  = f"engine_{engine_id}"
-    rows        = engine_df.to_dict("records")
-    total_rows  = len(rows)
-    abs_cycle   = 0
-    loop_num    = 0
+    machine_id = f"engine_{engine_id}"
+    rows       = engine_df.to_dict("records")
+    total_rows = len(rows)
+    abs_cycle  = 0
+    loop_num   = 0
 
-    # First-pass: start offset
-    start_idx = int(stagger_frac * total_rows)
+    # Start offset into the dataset for fleet staggering
+    row_ptr = int(stagger_frac * total_rows)
+
     print(
         f"[{machine_id}] {total_rows} training cycles | "
-        f"first pass starts at dataset row {start_idx}/{total_rows} "
+        f"starting at dataset row {row_ptr}/{total_rows} "
         f"({int(stagger_frac*100)}% into lifecycle)"
     )
 
     while True:
-        loop_num  += 1
-        first_pass = (loop_num == 1)
-        slice_rows = rows[start_idx:] if first_pass else rows
+        # ── Poll speed every N cycles ─────────────────────────────────────
+        if abs_cycle % _POLL_EVERY_N == 0:
+            await poll_speed(host, client)
 
-        for row in slice_rows:
-            if abs_cycle % _POLL_EVERY_N == 0:
-                await poll_speed(host, client)
+        speed = max(0.1, _cached_speed)
 
-            speed      = max(0.1, _cached_speed)
-            interval_s = 1.0 / (base_rate * speed)
-            abs_cycle += 1
+        # ── How many dataset rows to advance this tick ────────────────────
+        # At 1x:   step=1      (navigate slowly through lifecycle)
+        # At 10x:  step~3      (faster lifecycle progression)
+        # At 100x: step=20     (RUL drops fast, urgency changes clearly)
+        if speed >= 50:
+            step = max(1, int(speed / 5))   # 100x → step=20
+        elif speed >= 10:
+            step = max(1, int(speed / 7))   # 25x  → step~4
+        else:
+            step = 1                         # 1x–5x → 1 row per tick
 
-            payload: dict = {
-                "machine_id":      machine_id,
-                "cycle":           abs_cycle,
-                "op_setting_1":    float(row["op1"]),
-                "op_setting_2":    float(row["op2"]),
-                "op_setting_3":    float(row["op3"]),
-                "sensor_readings": [float(row[c]) for c in _FEATURE_COLS],
-            }
+        # Current row to send
+        current_row = rows[row_ptr % total_rows]
+        abs_cycle  += step
 
-            try:
-                resp = await client.post(
-                    f"{host}/ingest", json=payload, timeout=5.0
+        payload: dict = {
+            "machine_id":      machine_id,
+            "cycle":           abs_cycle,
+            "op_setting_1":    float(current_row["op1"]),
+            "op_setting_2":    float(current_row["op2"]),
+            "op_setting_3":    float(current_row["op3"]),
+            "sensor_readings": [float(current_row[c]) for c in _FEATURE_COLS],
+        }
+
+        try:
+            resp = await client.post(
+                f"{host}/ingest", json=payload, timeout=5.0
+            )
+            resp.raise_for_status()
+            if abs_cycle % 60 == 0:
+                pct = (row_ptr % total_rows) / total_rows * 100
+                print(
+                    f"[{machine_id}] abs={abs_cycle:6d} | "
+                    f"lifecycle {pct:5.1f}% | {speed:.0f}x | step={step}"
                 )
-                resp.raise_for_status()
-                if abs_cycle % 30 == 0:
-                    pct = (abs_cycle % total_rows) / total_rows * 100
-                    print(
-                        f"[{machine_id}] abs={abs_cycle:6d} | "
-                        f"lifecycle {pct:5.1f}% | {speed:.0f}x | loop#{loop_num}"
-                    )
-            except httpx.HTTPError as exc:
-                print(f"[{machine_id}] FAILED cycle={abs_cycle}: {exc}")
+        except httpx.HTTPError as exc:
+            print(f"[{machine_id}] FAILED cycle={abs_cycle}: {exc}")
 
-            await asyncio.sleep(interval_s)
+        # Advance dataset pointer
+        row_ptr += step
+        if row_ptr >= total_rows:
+            row_ptr = row_ptr % total_rows
+            loop_num += 1
+            print(f"[{machine_id}] Lifecycle #{loop_num} complete. Engine replaced (0%).")
 
-        # After completing a lifecycle, always restart from the beginning
-        start_idx = 0
-        print(f"[{machine_id}] Lifecycle #{loop_num} complete. Engine replaced - restarting from 0%.")
+        interval_s = 1.0 / (base_rate * speed)
+        await asyncio.sleep(interval_s)
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
@@ -161,9 +174,9 @@ async def run_simulation(
     selected  = engines if engines else available[:5]
 
     print("=" * 64)
-    print("  APEX Simulator - STAGGERED CONTINUOUS mode")
+    print("  APEX Simulator - STAGGERED BURST-SPEED mode")
     print(f"  Engines : {selected}")
-    print(f"  Mode    : Each engine starts at different lifecycle phase")
+    print(f"  Mode    : Staggered starts + speed-aware row stepping")
     print(f"  Rate    : {rate} cy/s per engine at 1x (speed from /control)")
     print(f"  Host    : {host}")
     print("=" * 64)
@@ -171,7 +184,6 @@ async def run_simulation(
     async with httpx.AsyncClient() as client:
         await poll_speed(host, client)
 
-        # Assign stagger offset per engine slot (wraps if more than 5 engines)
         tasks = [
             replay_engine(
                 engine_id    = eid,
@@ -190,7 +202,7 @@ async def run_simulation(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="APEX sensor simulator - staggered continuous degradation."
+        description="APEX sensor simulator - staggered burst-speed degradation."
     )
     p.add_argument("--engines",  nargs="+", type=int, default=None, metavar="ID")
     p.add_argument("--rate",     type=float, default=1.0)

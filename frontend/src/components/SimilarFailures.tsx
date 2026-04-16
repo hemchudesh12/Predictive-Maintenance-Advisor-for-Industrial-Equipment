@@ -38,8 +38,8 @@ export function SimilarFailures() {
             : sf.rul_at_detection < 100 ? 'var(--color-monitor)'
             : 'var(--color-healthy)';
 
-          const similarity = sf.similarity_score != null
-            ? `${Math.round(sf.similarity_score * 100)}%`
+          const similarity = (sf as any).similarity_score != null
+            ? `${Math.round((sf as any).similarity_score * 100)}%`
             : `${95 - idx * 7}%`;
 
           return (

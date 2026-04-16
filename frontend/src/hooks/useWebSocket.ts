@@ -1,6 +1,9 @@
 // src/hooks/useWebSocket.ts
 // Rock-solid WebSocket: single mount, store via getState refs (no dep-array teardown),
 // reconnect banner debounced 1.5s, exponential backoff up to 16s.
+//
+// SIMULATION GATE: frames are only applied to the store when simRunning === true.
+// When stopped, incoming frames are silently discarded so all values freeze.
 
 import { useEffect, useRef } from 'react';
 import { useApexStore } from '../store/apexStore';
@@ -13,6 +16,38 @@ const WS_URL = API_BASE
   : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/stream`;
 
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 16000];
+
+// localStorage key for persisting last-known machine frames
+const LS_MACHINES_KEY = 'apex_machines_snapshot';
+
+/** Persist current machine map to localStorage whenever a frame arrives. */
+function persistMachines(machines: Record<string, unknown>) {
+  try {
+    localStorage.setItem(LS_MACHINES_KEY, JSON.stringify(machines));
+  } catch { /* quota exceeded — skip */ }
+}
+
+/** Restore persisted machines into the store on page load. */
+export function restorePersistedMachines() {
+  try {
+    const raw = localStorage.getItem(LS_MACHINES_KEY);
+    if (!raw) return;
+    const machines = JSON.parse(raw);
+    if (machines && typeof machines === 'object' && Object.keys(machines).length > 0) {
+      // Inject as a synthetic frame so applyFrame handles history + selection
+      const machineList = Object.values(machines) as StreamFrame['machines'];
+      const frame: StreamFrame = {
+        timestamp: new Date().toISOString(),
+        sequence_id: 0,
+        machines: machineList,
+        fleet_stats: { critical: 0, warning: 0, monitor: 0, healthy: machineList.length, total: machineList.length },
+        backend_health: { p99_latency_ms: 0, uptime_sec: 0, machine_count: machineList.length },
+      };
+      // Apply WITHOUT gating (this is a restore, not live data)
+      useApexStore.getState().applyFrame(frame);
+    }
+  } catch { /* corrupt storage — ignore */ }
+}
 
 export function useWebSocket() {
   const wsRef          = useRef<WebSocket | null>(null);
@@ -27,9 +62,11 @@ export function useWebSocket() {
 
     // ── Voice alert (pure function, no closure deps) ───────────────────────
     // Fires only on CRITICAL transition — once per machine per CRITICAL event.
+    // Respects the voiceAlertMuted flag set by the user via the Header button.
     function fireVoice(machineId: string, level: string) {
       if (level !== 'CRITICAL') return;
       if (!('speechSynthesis' in window)) return;
+      if (useApexStore.getState().voiceAlertMuted) return; // user silenced it
       const pumpName = getPumpName(machineId);
       const utt = new SpeechSynthesisUtterance(
         `Critical alert. ${pumpName} requires immediate attention.`
@@ -56,11 +93,15 @@ export function useWebSocket() {
     }
 
     // ── Hydrate state from /snapshot after (re)connect ────────────────────
+    // GATE: only apply if simulation is running — otherwise the snapshot
+    // would overwrite the frozen "last known" values.
     function fetchSnapshot() {
       fetch(`${API_BASE}/snapshot`)
         .then(r => r.json())
         .then(snap => {
           if (!mountedRef.current) return;
+          // Only push snapshot data if the simulation is live
+          if (!useApexStore.getState().simRunning) return;
           if (snap.machines?.length > 0) {
             const frame: StreamFrame = {
               timestamp: snap.timestamp ?? new Date().toISOString(),
@@ -70,6 +111,7 @@ export function useWebSocket() {
               backend_health: snap.backend_health ?? { p99_latency_ms: 0, uptime_sec: 0, machine_count: 0 },
             };
             useApexStore.getState().applyFrame(frame);
+            persistMachines(useApexStore.getState().machines);
           }
           useApexStore.getState().setFallbackMode(snap.fallback_mode ?? false);
         })
@@ -111,6 +153,10 @@ export function useWebSocket() {
 
       ws.onmessage = (ev) => {
         if (!mountedRef.current) return;
+
+        // GATE: discard live frames when simulation is stopped — values stay frozen
+        if (!useApexStore.getState().simRunning) return;
+
         try {
           const data = JSON.parse(ev.data as string);
 
@@ -124,6 +170,9 @@ export function useWebSocket() {
           const prevVoice = { ...voiceRef.current };
 
           useApexStore.getState().applyFrame(frame);
+
+          // Persist updated machine values to localStorage
+          persistMachines(useApexStore.getState().machines);
 
           // Voice alert on urgency transitions
           for (const machine of frame.machines) {

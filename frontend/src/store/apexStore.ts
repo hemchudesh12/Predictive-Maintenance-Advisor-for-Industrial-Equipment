@@ -29,6 +29,9 @@ interface ApexState {
   selectedMachineId: string | null;
   connectionState: ConnectionState;
   fallbackMode: boolean;
+  viewMode: 'fleet' | 'detail';
+  simRunning: boolean;          // is the simulator subprocess alive?
+  voiceAlertMuted: boolean;     // user manually silenced the CRITICAL voice
 
   // Modals
   emailModalOpen: boolean;
@@ -49,6 +52,9 @@ interface ApexState {
   // Actions
   applyFrame: (frame: StreamFrame) => void;
   setSelectedMachine: (id: string | null) => void;
+  setViewMode: (mode: 'fleet' | 'detail') => void;
+  setSimRunning: (v: boolean) => void;
+  setVoiceAlertMuted: (v: boolean) => void;
   setConnectionState: (state: ConnectionState) => void;
   setFallbackMode: (v: boolean) => void;
   setSpeedFactor: (f: number) => void;
@@ -75,6 +81,9 @@ export const useApexStore = create<ApexState>((set, get) => ({
   selectedMachineId: null,
   connectionState: 'connecting',
   fallbackMode: false,
+  viewMode: 'fleet',
+  simRunning: false,
+  voiceAlertMuted: false,
 
   emailModalOpen: false,
   shortcutsModalOpen: false,
@@ -146,6 +155,9 @@ export const useApexStore = create<ApexState>((set, get) => ({
   },
 
   setSelectedMachine: (id) => set({ selectedMachineId: id }),
+  setViewMode: (mode) => set({ viewMode: mode }),
+  setSimRunning: (v) => set({ simRunning: v }),
+  setVoiceAlertMuted: (v) => set({ voiceAlertMuted: v }),
   setConnectionState: (state) => set({ connectionState: state }),
   setFallbackMode: (v) => set({ fallbackMode: v }),
   setSpeedFactor: (f) => set({ speedFactor: f }),
@@ -172,6 +184,7 @@ export const useApexStore = create<ApexState>((set, get) => ({
       lastFrameTime: 0,
       sequenceId: 0,
       selectedMachineId: null,
+      viewMode: 'fleet',
       lastUrgencyLevel: {},
       warningFirstSeen: {},
     }),

@@ -5,6 +5,7 @@ import { useApexStore } from '../store/apexStore';
 import { MachineCard } from './MachineCard';
 import { ReplayControls } from './ReplayControls';
 import { SkeletonCard } from './SkeletonCard';
+import { SimulationControls } from './SimulationControls';
 
 export function Sidebar() {
   const { machines, connectionState } = useApexStore();
@@ -55,6 +56,8 @@ export function Sidebar() {
 
       <div className="divider" />
       <ReplayControls />
+      <div className="divider" style={{ marginTop: 10 }} />
+      <SimulationControls />
     </aside>
   );
 }

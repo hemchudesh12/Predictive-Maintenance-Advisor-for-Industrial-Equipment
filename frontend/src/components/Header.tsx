@@ -4,7 +4,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useApexStore } from '../store/apexStore';
 
-const API_BASE = import.meta.env.VITE_API_URL ?? '';
 
 function formatUptime(sec: number): string {
   const h = Math.floor(sec / 3600);
@@ -19,7 +18,20 @@ export function Header() {
   const {
     connectionState, backendHealth, lastFrameTime,
     fallbackMode, fleetStats, setEmailModal, setShortcutsModal,
+    voiceAlertMuted, setVoiceAlertMuted, machines,
   } = useApexStore();
+
+  // Is any machine currently CRITICAL?
+  const hasCritical = Object.values(machines).some(m => m.urgency.level === 'CRITICAL');
+
+  function stopVoiceAlert() {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    setVoiceAlertMuted(true);
+  }
+
+  function unmuteVoiceAlert() {
+    setVoiceAlertMuted(false);
+  }
 
   const [now, setNow] = useState(Date.now());
   const [uptimeOffset, setUptimeOffset] = useState(0); // seconds elapsed since last frame
@@ -83,9 +95,8 @@ export function Header() {
       className="app-header card--glass"
       style={{
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '0 20px',
+        flexDirection: 'column',
+        padding: 0,
         borderBottom: '1px solid var(--apex-border)',
         borderRadius: 0,
         background: 'rgba(8,12,22,0.95)',
@@ -93,6 +104,74 @@ export function Header() {
         zIndex: 50,
       }}
     >
+      {/* ── CRITICAL voice alert banner ──────────────────────────────────── */}
+      {hasCritical && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '6px 20px',
+            background: 'rgba(255, 45, 45, 0.15)',
+            borderBottom: '1px solid rgba(255, 45, 45, 0.35)',
+            animation: 'critical-pulse-bg 1.5s ease-in-out infinite',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 16 }}>🚨</span>
+            <span style={{ fontSize: 12, color: '#FF6B6B', fontWeight: 700 }}>
+              CRITICAL ALERT —&nbsp;
+              {Object.values(machines)
+                .filter(m => m.urgency.level === 'CRITICAL')
+                .map(m => m.machine_id.replace('engine_', 'Engine '))
+                .join(', ')}
+              &nbsp;require immediate attention
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {!voiceAlertMuted ? (
+              <button
+                onClick={stopVoiceAlert}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  background: 'rgba(255,45,45,0.25)',
+                  border: '1px solid rgba(255,45,45,0.5)',
+                  color: '#FF6B6B',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                }}
+                title="Stop voice alert and mute further CRITICAL announcements"
+              >
+                🔇 Stop Alert
+              </button>
+            ) : (
+              <button
+                onClick={unmuteVoiceAlert}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  background: 'rgba(100,100,100,0.2)',
+                  border: '1px solid #555',
+                  color: '#aaa',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                }}
+                title="Re-enable voice alerts"
+              >
+                🔊 Unmute
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Main header row ─────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', height: 56 }}>
       {/* ── Left: brand ───────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2">
         <span style={{
@@ -177,6 +256,7 @@ export function Header() {
           ?
         </button>
       </div>
+      </div>  {/* end main header row */}
     </header>
   );
 }

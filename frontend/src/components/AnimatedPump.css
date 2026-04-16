@@ -1,0 +1,84 @@
+.animated-pump-container {
+  width: 100%;
+  max-width: 280px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.pump-svg {
+  width: 100%;
+  height: auto;
+}
+
+/* 
+  We use custom properties so they can be overridden if needed, 
+  but inline styles control the duration via React based on urgency. 
+*/
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+
+@keyframes flowOffset {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes flowOffsetReverse {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 24; }
+}
+
+.impeller {
+  transform-origin: 150px 135px; /* Center of impeller */
+  animation-name: spin;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.bearing-shake {
+  animation-name: shake;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.discharge-flow {
+  animation-name: flowOffset; /* arrows pointing up out of pipe */
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.suction-flow {
+  animation-name: flowOffset; /* arrows pointing up into pipe */
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+/* Pulsing effect for danger colors */
+:root {
+  --pulse-danger: #dc2626;
+}
+
+@keyframes dangerPulse {
+  0% { fill: #ef4444; }
+  50% { fill: #991b1b; }
+  100% { fill: #ef4444; }
+}
+
+/* Opt-out of animations */
+@media (prefers-reduced-motion: reduce) {
+  .impeller,
+  .bearing-shake,
+  .discharge-flow,
+  .suction-flow {
+    animation: none !important;
+  }
+}

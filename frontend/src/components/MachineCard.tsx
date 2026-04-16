@@ -37,7 +37,7 @@ function cycleLabel(cycle: number): string {
 }
 
 export function MachineCard({ machine, index }: Props) {
-  const { selectedMachineId, setSelectedMachine } = useApexStore();
+  const { selectedMachineId, setSelectedMachine, setViewMode } = useApexStore();
   const isSelected = selectedMachineId === machine.machine_id;
   const { urgency, rul_mean, rul_std, buffer_length, mode, current_cycle } = machine;
   const warming = buffer_length < 30;
@@ -51,9 +51,14 @@ export function MachineCard({ machine, index }: Props) {
         borderRadius: 'var(--border-radius)',
         padding: '12px 14px',
       }}
-      onClick={() => setSelectedMachine(machine.machine_id)}
+      onClick={() => { setSelectedMachine(machine.machine_id); setViewMode('detail'); }}
       tabIndex={0}
-      onKeyDown={e => e.key === 'Enter' && setSelectedMachine(machine.machine_id)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          setSelectedMachine(machine.machine_id);
+          setViewMode('detail');
+        }
+      }}
       role="button"
       aria-pressed={isSelected}
       aria-label={`${machine.machine_id}, urgency ${urgency.level}, RUL ${rul_mean.toFixed(0)} cycles`}
