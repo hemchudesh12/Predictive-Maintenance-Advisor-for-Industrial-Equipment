@@ -1,0 +1,40 @@
+# CMAPSS dataset — never commit raw sensor data
+data/raw/*
+!data/raw/.gitkeep
+
+# Python byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Model checkpoints (Phase 2+)
+checkpoints/
+*.pt
+*.pth
+*.onnx
+
+# Logs
+*.log
