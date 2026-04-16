@@ -8,6 +8,17 @@ import { useApexStore } from '../store/apexStore';
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const SPEEDS = [1, 2, 5, 10, 25, 50, 100];
 
+// Human-readable labels per speed button
+const SPEED_HUMAN_LABELS: Record<number, string> = {
+  1:   'Real-time · 1h/sec',
+  2:   '2h/sec',
+  5:   '5h/sec',
+  10:  '~10h/sec',
+  25:  '~1 day/sec',
+  50:  '~2 days/sec',
+  100: '~4 days/sec',
+};
+
 // 1 cycle ≈ 1 hour → speedFactor cycles/s → engineHours/s → engineDays per real minute
 function speedToTimeRate(speedFactor: number): string {
   const hoursPerRealMin  = speedFactor * 60;          // engine hours per real minute
@@ -74,7 +85,8 @@ export function ReplayControls() {
             }}
             onClick={() => changeSpeed(s)}
             disabled={pending}
-            aria-label={`Set replay speed to ${s}x`}
+            title={SPEED_HUMAN_LABELS[s]}
+            aria-label={`Set replay speed to ${s}x — ${SPEED_HUMAN_LABELS[s]}`}
             aria-pressed={speedFactor === s}
           >
             {s}x
@@ -82,18 +94,26 @@ export function ReplayControls() {
         ))}
       </div>
 
-      {/* Time-rate label */}
+      {/* Prominent time-rate label */}
       <div style={{
         background: 'var(--apex-surface-2)',
         borderRadius: 8,
-        padding: '6px 10px',
-        fontSize: 11,
-        color: 'var(--accent)',
-        fontFamily: 'var(--font-mono)',
+        padding: '8px 10px',
         textAlign: 'center',
-        letterSpacing: '0.02em',
       }}>
-        {pending ? '⏳ Applying…' : speedToTimeRate(speedFactor)}
+        <div style={{
+          fontSize: 14,
+          fontWeight: 700,
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono)',
+          letterSpacing: '0.02em',
+          lineHeight: 1.3,
+        }}>
+          {pending ? '⏳ Applying…' : SPEED_HUMAN_LABELS[speedFactor] ?? `${speedFactor}x`}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3, fontFamily: 'var(--font-mono)' }}>
+          {pending ? '' : speedToTimeRate(speedFactor)}
+        </div>
       </div>
 
       <div className="muted" style={{ fontSize: 10, marginTop: 6, textAlign: 'center' }}>
