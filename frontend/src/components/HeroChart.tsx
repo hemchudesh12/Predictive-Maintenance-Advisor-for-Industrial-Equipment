@@ -13,8 +13,11 @@ import {
   YAxis,
 } from 'recharts';
 import { useApexStore } from '../store/apexStore';
+import { getPumpName, getComponentName } from '../constants/machines';
+import { LifecycleTimeline } from './LifecycleTimeline';
+import { CounterfactualCard } from './CounterfactualCard';
 
-const CHART_HEIGHT = 260;
+const CHART_HEIGHT = 240;
 
 // ── Time conversion: 1 CMAPSS cycle ≈ 1 hour of engine operation ──────────────
 function cycleToEngineTime(cycle: number): string {
@@ -89,26 +92,31 @@ export function HeroChart() {
 
   const data = hist.map(p => ({ ...p }));
 
-  // ── Compute time-rate label for the X-axis header ─────────────────────────
-  // 1 cycle = 1 hour → at speedFactor X, the simulator ingests speedFactor cycles/s
-  const cyclesPerSec = speedFactor;
-  const engineSecondsPerRealSecond = cyclesPerSec * 3600; // engine seconds
-  const engineHoursPerRealSec = cyclesPerSec;             // 1 cy = 1h
-  const engineDaysPerRealMin  = engineHoursPerRealSec * 60 / 24;
+  // ── Dynamic Y-axis: tight to data, capped sensibly ────────────────────────
+  let yMax = 140;
+  if (hist.length > 0) {
+    const maxUpper = Math.max(...hist.map(p => p.rul_upper_95));
+    yMax = Math.max(40, Math.min(140, Math.ceil(maxUpper / 10) * 10 + 10));
+  } else {
+    // Use current machine's upper bound as initial scale
+    yMax = Math.max(40, Math.min(140, Math.ceil(machine.rul_upper_95 / 10) * 10 + 20));
+  }
 
-  const speedTimeLabel =
-    engineDaysPerRealMin >= 30
-      ? `${(engineDaysPerRealMin / 30).toFixed(1)} months/min`
-      : engineDaysPerRealMin >= 1
-        ? `${engineDaysPerRealMin.toFixed(1)} days/min`
-        : `${(engineHoursPerRealSec * 60).toFixed(0)} hours/min`;
+  // ── Display names ─────────────────────────────────────────────────────────
+  const pumpName = getPumpName(machine.machine_id);
+  const componentName = getComponentName(machine.machine_id, machine.component_attribution.component);
 
   return (
     <div id="hero-chart-section" className="card" style={{ padding: '16px 18px', marginBottom: 'var(--gap-section)' }}>
       {/* Chart header */}
-      <div className="flex justify-between items-center" style={{ marginBottom: 14 }}>
+      <div className="flex justify-between items-center" style={{ marginBottom: 10 }}>
         <div>
-          <div className="section-title">{machine.machine_id}</div>
+          <div className="section-title">
+            {pumpName}
+            <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 400 }}>
+              · {componentName}
+            </span>
+          </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
             {machine.component_attribution.recommendation}
           </div>
@@ -120,12 +128,13 @@ export function HeroChart() {
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
             ±{machine.rul_std.toFixed(1)} · p(fail30)={Math.round(machine.fail_prob_30 * 100)}%
           </div>
-          {/* Speed time indicator */}
-          <div style={{ fontSize: 10, color: 'var(--accent)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>
-            ⚡ {speedFactor}x → {speedTimeLabel}
-          </div>
         </div>
       </div>
+
+      {/* Lifecycle timeline — between header and chart */}
+      {!warming && (
+        <LifecycleTimeline machine={machine} speedFactor={speedFactor} />
+      )}
 
       {/* Engine time axis label */}
       {hist.length > 1 && (
@@ -180,15 +189,15 @@ export function HeroChart() {
             <YAxis
               stroke="var(--text-muted)"
               tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-              domain={[0, 130]}
+              domain={[0, yMax]}
               label={{ value: 'RUL (cy)', angle: -90, position: 'insideLeft', offset: 14, style: { fontSize: 9, fill: 'var(--text-muted)' } }}
             />
 
             <Tooltip content={<CustomTooltip />} />
 
-            {/* 30-cycle danger line */}
-            <ReferenceLine y={30} stroke="var(--color-critical)" strokeDasharray="4 3" strokeOpacity={0.5}
-              label={{ value: 'FAIL ZONE', position: 'insideTopLeft', style: { fontSize: 9, fill: 'var(--color-critical)', opacity: 0.7 } }}
+            {/* 30-cycle fail zone line */}
+            <ReferenceLine y={30} stroke="var(--color-critical)" strokeDasharray="4 3" strokeOpacity={0.65}
+              label={{ value: 'FAIL ZONE', position: 'insideTopLeft', style: { fontSize: 9, fill: 'var(--color-critical)', opacity: 0.8 } }}
             />
 
             {/* CI band */}
@@ -208,6 +217,9 @@ export function HeroChart() {
           </AreaChart>
         </ResponsiveContainer>
       )}
+
+      {/* CRITICAL counterfactual cost card */}
+      <CounterfactualCard />
     </div>
   );
 }
