@@ -5,6 +5,7 @@
 import { useEffect, useRef } from 'react';
 import { useApexStore } from '../store/apexStore';
 import type { StreamFrame } from '../types/apex';
+import { getPumpName } from '../constants/machines';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const WS_URL = API_BASE
@@ -25,15 +26,16 @@ export function useWebSocket() {
     mountedRef.current = true;
 
     // ── Voice alert (pure function, no closure deps) ───────────────────────
+    // Fires only on CRITICAL transition — once per machine per CRITICAL event.
     function fireVoice(machineId: string, level: string) {
-      if (level !== 'CRITICAL' && level !== 'WARNING') return;
+      if (level !== 'CRITICAL') return;
       if (!('speechSynthesis' in window)) return;
-      const msg = level === 'CRITICAL'
-        ? `Alert! ${machineId} is critical. Immediate action required.`
-        : `Warning! ${machineId} entering warning zone. Schedule maintenance.`;
-      const utt = new SpeechSynthesisUtterance(msg);
-      utt.rate = 1.0;
-      utt.pitch = level === 'CRITICAL' ? 1.2 : 1.0;
+      const pumpName = getPumpName(machineId);
+      const utt = new SpeechSynthesisUtterance(
+        `Critical alert. ${pumpName} requires immediate attention.`
+      );
+      utt.rate = 0.9;
+      utt.pitch = 0.8;
       window.speechSynthesis.speak(utt);
     }
 
