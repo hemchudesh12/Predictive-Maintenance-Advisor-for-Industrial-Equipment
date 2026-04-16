@@ -43,6 +43,9 @@ interface ApexState {
   // Voice alert guard: track last urgency level per machine to prevent duplicate alerts
   lastUrgencyLevel: Record<string, string>;
 
+  // Counterfactual: cycle + rul_mean when a machine first entered WARNING or CRITICAL
+  warningFirstSeen: Record<string, { cycle: number; rul: number }>;
+
   // Actions
   applyFrame: (frame: StreamFrame) => void;
   setSelectedMachine: (id: string | null) => void;
@@ -78,6 +81,7 @@ export const useApexStore = create<ApexState>((set, get) => ({
   costConfig: null,
   toasts: [],
   lastUrgencyLevel: {},
+  warningFirstSeen: {},
 
   applyFrame: (frame: StreamFrame) => {
     const state = get();
@@ -87,6 +91,7 @@ export const useApexStore = create<ApexState>((set, get) => ({
     const nextMachines: Record<string, MachineFrame> = {};
     const nextHistory = { ...state.history };
     const nextUrgencyLevels = { ...state.lastUrgencyLevel };
+    const nextWarningFirstSeen = { ...state.warningFirstSeen };
 
     for (const machine of frame.machines) {
       nextMachines[machine.machine_id] = machine;
@@ -107,6 +112,15 @@ export const useApexStore = create<ApexState>((set, get) => ({
 
       // Track urgency transitions for voice alert guard
       nextUrgencyLevels[machine.machine_id] = machine.urgency.level;
+
+      // Track when machine first enters WARNING or CRITICAL (even if it starts there)
+      const level = machine.urgency.level;
+      if ((level === 'WARNING' || level === 'CRITICAL') && !nextWarningFirstSeen[machine.machine_id]) {
+        nextWarningFirstSeen[machine.machine_id] = {
+          cycle: machine.current_cycle,
+          rul: machine.rul_mean,
+        };
+      }
     }
 
     // Auto-select first machine if none selected
@@ -125,6 +139,7 @@ export const useApexStore = create<ApexState>((set, get) => ({
       sequenceId: frame.sequence_id,
       selectedMachineId: nextSel,
       lastUrgencyLevel: nextUrgencyLevels,
+      warningFirstSeen: nextWarningFirstSeen,
     });
 
     return nextUrgencyLevels;
@@ -158,5 +173,6 @@ export const useApexStore = create<ApexState>((set, get) => ({
       sequenceId: 0,
       selectedMachineId: null,
       lastUrgencyLevel: {},
+      warningFirstSeen: {},
     }),
 }));

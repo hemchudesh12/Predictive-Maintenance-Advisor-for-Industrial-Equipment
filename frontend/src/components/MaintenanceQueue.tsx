@@ -4,6 +4,7 @@
 
 import { useApexStore } from '../store/apexStore';
 import type { MachineFrame } from '../types/apex';
+import { getPumpName, getComponentName } from '../constants/machines';
 
 const URGENCY_ORDER: Record<string, number> = { CRITICAL: 0, WARNING: 1, MONITOR: 2, HEALTHY: 3 };
 
@@ -37,7 +38,7 @@ function QueueRow({ machine, rank, savings }: { machine: MachineFrame; rank: num
         <div className="flex items-center gap-2">
           <span className="muted mono" style={{ fontSize: 11 }}>#{rank}</span>
           <span className="section-title" style={{ fontSize: 13, fontFamily: 'var(--font-mono)' }}>
-            {machine.machine_id}
+            {getPumpName(machine.machine_id)}
           </span>
           <span className={`badge badge-${urgency.level}`}>{urgency.level}</span>
         </div>
@@ -63,7 +64,7 @@ function QueueRow({ machine, rank, savings }: { machine: MachineFrame; rank: num
       }}>
         <div className="flex justify-between" style={{ marginBottom: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-primary)' }}>
-            🔧 {attr.component}
+            🔧 {getComponentName(machine.machine_id, attr.component)}
           </span>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
             {Math.round(attr.confidence * 100)}% confidence

@@ -4,6 +4,7 @@
 
 import { useApexStore } from '../store/apexStore';
 import type { MachineFrame } from '../types/apex';
+import { getPumpName, getComponentName } from '../constants/machines';
 
 interface Props {
   machine: MachineFrame;
@@ -64,7 +65,7 @@ export function MachineCard({ machine, index }: Props) {
             {index + 1}
           </span>
           <span className="section-title" style={{ fontSize: 13, fontFamily: 'var(--font-mono)' }}>
-            {machine.machine_id}
+            {getPumpName(machine.machine_id)}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -79,7 +80,7 @@ export function MachineCard({ machine, index }: Props) {
 
       {/* Attribution component */}
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, paddingLeft: 22 }}>
-        {machine.component_attribution.component}
+        {getComponentName(machine.machine_id, machine.component_attribution.component)}
       </div>
 
       {warming ? (
