@@ -1,0 +1,14 @@
+data:
+  window_size: 30
+  stride: 1
+  rul_cap: 125
+  drop_sensors: [1, 5, 6, 10, 16, 18, 19]
+  feature_sensors: [2, 3, 4, 7, 8, 9, 11, 12, 13, 14, 15, 17, 20, 21]
+model:
+  hidden: 64
+  dropout: 0.3
+  mc_samples: 50
+api:
+  host: "0.0.0.0"
+  port: 8000
+  buffer_size: 30
