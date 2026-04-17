@@ -7,6 +7,18 @@ APEX is a comprehensive predictive maintenance system for turbofan engines built
 
 ---
 
+## 📁 Directory Structure
+
+```text
+apex/
+ ├── backend/       # FastAPI app, Simulator, ML Models, Data scripts
+ ├── frontend/      # React + Vite + Zustand Dashboard
+ ├── checkpoints/   # Model weights (.pt files)
+ └── README.md
+```
+
+---
+
 ## 🌟 Key Features
 
 - **CNN-BiLSTM Architecture**: Robust spatial-temporal feature extraction capturing long-term degradation dependencies.
@@ -26,7 +38,7 @@ APEX is a comprehensive predictive maintenance system for turbofan engines built
 
 ### Flow Architecture
 
-```
+```text
 NASA FD001 Data ──► Simulator (Continuous) ───[ HTTP POST /ingest ]──► FastAPI Backend (Ring Buffer)
                                                                                   │
      React Dashboard ◄──[ WebSocket /stream (1-15 Hz) ]── MCDropoutPredictor ◄── CNNBiLSTMRul (PyTorch)
@@ -39,6 +51,8 @@ NASA FD001 Data ──► Simulator (Continuous) ───[ HTTP POST /ingest ]�
 ### 1. Backend & ML Environment (Python)
 
 ```bash
+cd backend
+
 # Create a virtual environment
 python -m venv .venv
 
@@ -61,10 +75,10 @@ npm install
 
 ### 3. Data Setup
 
-Drop the CMAPSS FD001 files in `data/raw/` (ignored by version control):
+Drop the CMAPSS FD001 files in `backend/data/raw/` (ignored by version control):
 
-```
-data/raw/
+```text
+backend/data/raw/
 ├── train_FD001.txt
 ├── test_FD001.txt
 └── RUL_FD001.txt
@@ -78,13 +92,13 @@ To see the system in action, start the three core processes in separate terminal
 
 **1. Start the Backend API:**
 ```bash
-# From project root
+# From backend/ directory
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
 **2. Start the Continuous Simulator:**
 ```bash
-# From project root
+# From backend/ directory
 # Simulates engines 1-5, starting base rate 1 cy/s
 python -m src.simulator.replay --engines 1 2 3 4 5 --rate 1
 ```

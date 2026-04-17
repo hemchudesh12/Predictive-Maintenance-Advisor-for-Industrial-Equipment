@@ -1,5 +1,6 @@
 // src/store/apexStore.ts
 // Zustand global state store for APEX dashboard
+// Added: activeAlerts (FIX 4), savingsEvents / totalSavings (Feature 5)
 
 import { create } from 'zustand';
 import type {
@@ -12,8 +13,29 @@ import type {
   StreamFrame,
   Toast,
 } from '../types/apex';
+import { getMachineConfig } from '../constants/machines';
 
 const MAX_HISTORY = 120; // 2-minute rolling window at 1 Hz
+
+// ── FIX 4: Active alert shape ─────────────────────────────────────────────────
+export interface ActiveAlert {
+  machineId: string;
+  machineName: string;
+  component: string;
+  startedAt: number;
+  acknowledged: boolean;
+}
+
+// ── Feature 5: Savings event shape ────────────────────────────────────────────
+export interface SavingsEvent {
+  machineId: string;
+  machineName: string;
+  component: string;
+  costAvoided: number;
+  costOfIntervention: number;
+  netSavings: number;
+  timestamp: number;
+}
 
 interface ApexState {
   // Live data
@@ -21,7 +43,7 @@ interface ApexState {
   history: Record<string, HistoryPoint[]>;
   fleetStats: FleetStats;
   backendHealth: BackendHealth;
-  lastFrameTime: number; // Date.now() of last received frame
+  lastFrameTime: number;
   sequenceId: number;
   speedFactor: number;
 
@@ -30,24 +52,31 @@ interface ApexState {
   connectionState: ConnectionState;
   fallbackMode: boolean;
   viewMode: 'fleet' | 'detail';
-  simRunning: boolean;          // is the simulator subprocess alive?
-  voiceAlertMuted: boolean;     // user manually silenced the CRITICAL voice
+  simRunning: boolean;
+  voiceAlertMuted: boolean;
 
   // Modals
   emailModalOpen: boolean;
   shortcutsModalOpen: boolean;
 
-  // Cost config (loaded once from /config/costs)
+  // Cost config
   costConfig: CostConfig | null;
 
   // Toasts
   toasts: Toast[];
 
-  // Voice alert guard: track last urgency level per machine to prevent duplicate alerts
+  // Voice alert guard: track last urgency level per machine
   lastUrgencyLevel: Record<string, string>;
 
-  // Counterfactual: cycle + rul_mean when a machine first entered WARNING or CRITICAL
+  // Counterfactual: cycle + rul_mean when machine first entered WARNING/CRITICAL
   warningFirstSeen: Record<string, { cycle: number; rul: number }>;
+
+  // FIX 4: Active critical alerts (per-machine, with acknowledge)
+  activeAlerts: Record<string, ActiveAlert>;
+
+  // Feature 5: Fleet savings tracker
+  savingsEvents: SavingsEvent[];
+  totalSavings: number;
 
   // Actions
   applyFrame: (frame: StreamFrame) => void;
@@ -63,7 +92,14 @@ interface ApexState {
   setShortcutsModal: (open: boolean) => void;
   addToast: (t: Omit<Toast, 'id'>) => void;
   removeToast: (id: string) => void;
-  resetStore: () => void; // called on simulator restart
+  resetStore: () => void;
+
+  // FIX 4: Alert actions
+  addAlert: (machineId: string, machineName: string, component: string) => void;
+  acknowledgeAlert: (machineId: string) => void;
+
+  // Feature 5: Savings actions
+  addSavingsEvent: (event: SavingsEvent) => void;
 }
 
 const defaultFleetStats: FleetStats = { critical: 0, warning: 0, monitor: 0, healthy: 0, total: 0 };
@@ -92,24 +128,37 @@ export const useApexStore = create<ApexState>((set, get) => ({
   lastUrgencyLevel: {},
   warningFirstSeen: {},
 
+  // FIX 4
+  activeAlerts: {},
+
+  // Feature 5
+  savingsEvents: [],
+  totalSavings: 0,
+
   applyFrame: (frame: StreamFrame) => {
     const state = get();
     const now = Date.now();
 
-    // Build updated machines map
     const nextMachines: Record<string, MachineFrame> = {};
     const nextHistory = { ...state.history };
     const nextUrgencyLevels = { ...state.lastUrgencyLevel };
     const nextWarningFirstSeen = { ...state.warningFirstSeen };
+    let nextActiveAlerts = { ...state.activeAlerts };
 
     for (const machine of frame.machines) {
       nextMachines[machine.machine_id] = machine;
 
-      // Append to history ring — use actual engine cycle for time-aware X-axis
+      // Append to history ring
       const prev = nextHistory[machine.machine_id] ?? [];
+
+      // FIX 1 (frontend layer): Also apply monotonic floor here so chart history
+      // never shows an increase even if backend hasn't been updated yet.
+      const prevRulInHistory = prev.length > 0 ? prev[prev.length - 1].rul_mean : Infinity;
+      const clampedRulMean = Math.min(machine.rul_mean, prevRulInHistory);
+
       const point: HistoryPoint = {
-        cycle: machine.current_cycle,   // real engine cycle (advances faster at higher speeds)
-        rul_mean: machine.rul_mean,
+        cycle: machine.current_cycle,
+        rul_mean: clampedRulMean,
         rul_lower_95: machine.rul_lower_95,
         rul_upper_95: machine.rul_upper_95,
         timestamp: now,
@@ -119,16 +168,42 @@ export const useApexStore = create<ApexState>((set, get) => ({
         ? next.slice(next.length - MAX_HISTORY)
         : next;
 
-      // Track urgency transitions for voice alert guard
-      nextUrgencyLevels[machine.machine_id] = machine.urgency.level;
+      // Track urgency transitions
+      const prevLevel = nextUrgencyLevels[machine.machine_id] ?? 'HEALTHY';
+      const currLevel = machine.urgency.level;
+      nextUrgencyLevels[machine.machine_id] = currLevel;
 
-      // Track when machine first enters WARNING or CRITICAL (even if it starts there)
-      const level = machine.urgency.level;
-      if ((level === 'WARNING' || level === 'CRITICAL') && !nextWarningFirstSeen[machine.machine_id]) {
+      // Track when machine first enters WARNING/CRITICAL
+      if ((currLevel === 'WARNING' || currLevel === 'CRITICAL') && !nextWarningFirstSeen[machine.machine_id]) {
         nextWarningFirstSeen[machine.machine_id] = {
           cycle: machine.current_cycle,
           rul: machine.rul_mean,
         };
+      }
+
+      // FIX 4: Detect CRITICAL transitions → add alert
+      if (currLevel === 'CRITICAL' && prevLevel !== 'CRITICAL') {
+        // Only add if not already acknowledged (or if this is a new CRITICAL event after recovery)
+        const existing = nextActiveAlerts[machine.machine_id];
+        if (!existing || existing.acknowledged) {
+          const cfg = getMachineConfig(machine.machine_id);
+          nextActiveAlerts = {
+            ...nextActiveAlerts,
+            [machine.machine_id]: {
+              machineId: machine.machine_id,
+              machineName: cfg.displayName,
+              component: cfg.component,
+              startedAt: now,
+              acknowledged: false,
+            },
+          };
+        }
+      }
+
+      // If machine recovered from CRITICAL, clear its alert tracking
+      if (currLevel !== 'CRITICAL' && prevLevel === 'CRITICAL') {
+        const { [machine.machine_id]: _removed, ...rest } = nextActiveAlerts;
+        nextActiveAlerts = rest;
       }
     }
 
@@ -149,6 +224,7 @@ export const useApexStore = create<ApexState>((set, get) => ({
       selectedMachineId: nextSel,
       lastUrgencyLevel: nextUrgencyLevels,
       warningFirstSeen: nextWarningFirstSeen,
+      activeAlerts: nextActiveAlerts,
     });
 
     return nextUrgencyLevels;
@@ -168,7 +244,6 @@ export const useApexStore = create<ApexState>((set, get) => ({
   addToast: (t) => {
     const id = `toast-${Date.now()}-${Math.random()}`;
     set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
-    // Auto-dismiss after 4s
     setTimeout(() => get().removeToast(id), 4000);
   },
 
@@ -187,5 +262,42 @@ export const useApexStore = create<ApexState>((set, get) => ({
       viewMode: 'fleet',
       lastUrgencyLevel: {},
       warningFirstSeen: {},
+      activeAlerts: {},
+      savingsEvents: [],
+      totalSavings: 0,
     }),
+
+  // FIX 4: Alert management
+  addAlert: (machineId, machineName, component) =>
+    set((s) => ({
+      activeAlerts: {
+        ...s.activeAlerts,
+        [machineId]: {
+          machineId,
+          machineName,
+          component,
+          startedAt: Date.now(),
+          acknowledged: false,
+        },
+      },
+    })),
+
+  acknowledgeAlert: (machineId) => {
+    console.log(`[ALERT ACK] ${machineId} acknowledged at ${new Date().toISOString()}`);
+    set((s) => ({
+      activeAlerts: {
+        ...s.activeAlerts,
+        [machineId]: s.activeAlerts[machineId]
+          ? { ...s.activeAlerts[machineId], acknowledged: true }
+          : s.activeAlerts[machineId],
+      },
+    }));
+  },
+
+  // Feature 5: Savings tracking
+  addSavingsEvent: (event) =>
+    set((s) => ({
+      savingsEvents: [...s.savingsEvents, event],
+      totalSavings: s.totalSavings + event.netSavings,
+    })),
 }));

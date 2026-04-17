@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import warnings
 from collections import deque
@@ -39,10 +40,15 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 import numpy as np
 import torch
 import yaml
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+# Load .env from project root (silently ignored if file doesn't exist)
+load_dotenv(dotenv_path=Path(".") / ".env", override=False)
+
 from src.api.attribution import attribute
+from src.api.email_alert import send_critical_alert
 from src.api.similar_failures import get_cached, preload
 from src.api.urgency import classify
 from src.models.cnn_bilstm import CNNBiLSTMRul, MCDropoutPredictor
@@ -91,11 +97,21 @@ _seq_id: int = 0
 # p99 latency tracker (ring of last 100)
 _latencies_ms: deque[float] = deque(maxlen=100)
 
-# Email rate-limiter: {machine_id → last_sent_timestamp}
-_email_last_sent: Dict[str, float] = {}
-
 # Replay control state
 _control: ControlState = ControlState(speed_factor=1.0, paused=False)
+
+# ── Monotonic RUL floor (FIX 1) ───────────────────────────────────────────────
+# Per-machine monotonic floor: RUL may only decrease, never increase.
+_previous_rul: Dict[str, float] = {}
+
+# ── Run-relative cycle tracking (FIX: prevents stale abs_cycle poisoning fallback) ─
+# Stores the first abs_cycle seen per machine WITHIN the current simulation run.
+_run_start_cycle: Dict[str, int] = {}
+
+# ── CRITICAL alert wiring (FIX 3) ────────────────────────────────────────────
+_previous_urgency: Dict[str, str] = {}       # {machine_id → last urgency level}
+_alert_recipients: Dict[str, str] = {}       # {machine_id → email}
+_last_email_time: Dict[str, float] = {}      # {machine_id → timestamp}
 
 # ── Simulation subprocess management ─────────────────────────────────────────
 import subprocess
@@ -128,7 +144,7 @@ def _build_frame(
     latency_ms: float,
     mode: str = "live",
 ) -> MachineFrame:
-    rul_cap = _cfg.get("data", {}).get("rul_cap", 125)
+    rul_cap = _cfg.get("data", {}).get("rul_cap", 160)
     rul_mean = float(np.clip(rul_mean, 0, rul_cap))
     rul_std = float(max(rul_std, 0.0))
 
@@ -270,13 +286,35 @@ async def _broadcast_loop() -> None:
         _ws_clients -= dead
 
 
-# ── Fallback predictor: plausible mock when checkpoint is missing ─────────────
+# ── Fallback predictor: realistic degradation when checkpoint is missing ──────────
 def _fallback_predict(machine_id: str, buf: deque[SensorPayload]):
-    """Return plausible mock RUL. Starts healthy, degrades with cycle count."""
-    rng = sum(ord(c) for c in machine_id) % 37   # deterministic per machine
-    last_cycle = buf[-1].cycle if buf else 1
-    rul_mean = max(5.0, 90.0 - (last_cycle * 0.4) + rng)
-    rul_std = 8.0 + (rng % 5)
+    """Return plausible RUL that starts HEALTHY and degrades realistically.
+
+    FIX: The old formula `90 - (last_cycle * 0.4)` floored to 5 immediately
+    because abs_cycle accumulates across simulator restarts (it starts at 1,
+    2, 3... but we were tracking absolute not relative cycle within this run).
+
+    New approach:
+      - Track the first cycle seen for each machine in this run (_run_start_cycle)
+      - Decay is relative to that starting point: relative_cycle = abs_cycle - start_cycle
+      - Starting RUL is 120-160 (per-machine deterministic offset)
+      - Decay rate: 0.25 RUL per cycle (~500 cycles to failure at 1x speed)
+    """
+    rng = sum(ord(c) for c in machine_id) % 41   # 0-40 deterministic per machine
+    base_rul = 120 + rng                          # 120-160 initial RUL
+
+    abs_cycle = buf[-1].cycle if buf else 1
+    start_cycle = _run_start_cycle.get(machine_id)
+    if start_cycle is None:
+        _run_start_cycle[machine_id] = abs_cycle
+        start_cycle = abs_cycle
+
+    relative_cycle = max(0, abs_cycle - start_cycle)  # cycles elapsed THIS run
+    rul_mean = max(1.0, base_rul - (relative_cycle * 0.25))
+    
+    # User requested reduction of the starting RUL uncertainty (±)
+    # Starts at ~1.0-2.0 and slightly increases as cycle grows to simulate degradation
+    rul_std  = 1.0 + (rng % 2) + (relative_cycle * 0.05) 
     return rul_mean, rul_std
 
 
@@ -360,8 +398,13 @@ app.add_middleware(
 @app.post("/ingest", response_model=MachineState, summary="Ingest one sensor cycle")
 async def ingest(payload: SensorPayload) -> MachineState:
     """Append sensor cycle. Runs inference if buffer is full (≥30 cycles)."""
-    buf = _get_or_create_buffer(payload.machine_id)
+    machine_id = payload.machine_id
+    buf = _get_or_create_buffer(machine_id)
     buf.append(payload)
+
+    # FIX 1: Init monotonic floor for new machines
+    if machine_id not in _previous_rul:
+        _previous_rul[machine_id] = float('inf')
 
     latest_pred: Optional[Prediction] = None
 
@@ -369,7 +412,7 @@ async def ingest(payload: SensorPayload) -> MachineState:
         t0 = time.perf_counter()
         try:
             if _fallback_mode or _predictor is None:
-                rul_mean, rul_std = _fallback_predict(payload.machine_id, buf)
+                rul_mean_raw, rul_std = _fallback_predict(machine_id, buf)
                 mode = "fallback"
             else:
                 # Scale window if scaler available
@@ -381,22 +424,65 @@ async def ingest(payload: SensorPayload) -> MachineState:
                         warnings.simplefilter("ignore", UserWarning)
                         window_raw = _scaler.transform(window_raw)
                 x = torch.from_numpy(window_raw).unsqueeze(0)     # (1, 30, 14)
-                means, stds = _predictor.predict(x)
-                rul_mean = float(means[0])
-                rul_std = float(stds[0])
+                samples_means, samples_stds = _predictor.predict(x)
+                rul_mean_raw = float(samples_means[0])
+                rul_std = float(samples_stds[0])
                 mode = "live"
+
+            # FIX 1: Monotonic floor — RUL may only decrease, never increase.
+            # The std / confidence band is NOT clamped (uncertainty can widen).
+            prev_rul = _previous_rul.get(machine_id, float('inf'))
+            rul_mean = min(rul_mean_raw, prev_rul)
+            _previous_rul[machine_id] = rul_mean
 
             latency_ms = (time.perf_counter() - t0) * 1000
             _latencies_ms.append(latency_ms)
 
-            frame = _build_frame(payload.machine_id, buf, rul_mean, rul_std, latency_ms, mode)
-            _latest_frames[payload.machine_id] = frame
+            frame = _build_frame(machine_id, buf, rul_mean, rul_std, latency_ms, mode)
+            _latest_frames[machine_id] = frame
 
             # Remove from degraded set on successful inference
-            _degraded.discard(payload.machine_id)
+            _degraded.discard(machine_id)
+
+            # FIX 3: Fire email on CRITICAL transition (with 5-minute cooldown)
+            current_urgency = frame.urgency.level
+            prev_urgency = _previous_urgency.get(machine_id, "HEALTHY")
+            if current_urgency == "CRITICAL" and prev_urgency != "CRITICAL":
+                cooldown_ok = (time.time() - _last_email_time.get(machine_id, 0)) > 300
+                if cooldown_ok:
+                    recipient = _alert_recipients.get(
+                        machine_id, os.getenv("ALERT_DEFAULT_RECIPIENT", "")
+                    )
+                    # Derive display name and type from known mapping
+                    _MACHINE_META = {
+                        "engine_1": ("Pump_A3",    "Centrifugal pump",  "Bearing"),
+                        "engine_2": ("Motor_B1",   "Induction motor",   "Winding"),
+                        "engine_3": ("Pump_C2",    "Centrifugal pump",  "Impeller"),
+                        "engine_4": ("Fan_D4",     "Cooling tower fan", "Belt/Pulley"),
+                        "engine_5": ("Conv_E7",    "Conveyor drive",    "Gearbox"),
+                    }
+                    disp_name, m_type, component = _MACHINE_META.get(
+                        machine_id, (machine_id, "Industrial machine", "Component")
+                    )
+                    _last_email_time[machine_id] = time.time()
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: send_critical_alert(
+                            machine_id=machine_id,
+                            machine_name=disp_name,
+                            machine_type=m_type,
+                            component=component,
+                            rul_mean=rul_mean,
+                            rul_std=rul_std,
+                            fail_prob=frame.urgency.fail_prob_30,
+                            recipient=recipient,
+                        ),
+                    )
+                    log.info(f"[APEX] CRITICAL transition detected for {machine_id} — email queued")
+            _previous_urgency[machine_id] = current_urgency
 
             latest_pred = Prediction(
-                machine_id=payload.machine_id,
+                machine_id=machine_id,
                 cycle=payload.cycle,
                 rul_mean=frame.rul_mean,
                 rul_std=frame.rul_std,
@@ -405,17 +491,17 @@ async def ingest(payload: SensorPayload) -> MachineState:
             )
 
         except Exception as exc:
-            log.error(f"[APEX] Inference error on {payload.machine_id}: {exc}")
-            _degraded.add(payload.machine_id)
+            log.error(f"[APEX] Inference error on {machine_id}: {exc}")
+            _degraded.add(machine_id)
             # Keep last good frame with degraded mode flag
-            if payload.machine_id in _latest_frames:
-                existing = _latest_frames[payload.machine_id]
-                _latest_frames[payload.machine_id] = existing.model_copy(
+            if machine_id in _latest_frames:
+                existing = _latest_frames[machine_id]
+                _latest_frames[machine_id] = existing.model_copy(
                     update={"mode": "degraded"}
                 )
 
     return MachineState(
-        machine_id=payload.machine_id,
+        machine_id=machine_id,
         last_cycle=payload.cycle,
         buffer_length=len(buf),
         latest_prediction=latest_pred,
@@ -493,7 +579,7 @@ async def alert_email(req: EmailAlertRequest) -> EmailAlertResponse:
     """
     rate_limit_sec = _cfg.get("email", {}).get("rate_limit_seconds", 60)
     now = time.time()
-    last = _email_last_sent.get(req.machine_id, 0.0)
+    last = _last_email_time.get(req.machine_id, 0.0)
     elapsed = now - last
 
     if elapsed < rate_limit_sec:
@@ -506,7 +592,7 @@ async def alert_email(req: EmailAlertRequest) -> EmailAlertResponse:
             error=f"Rate limited. Try again in {retry_in}s.",
         )
 
-    _email_last_sent[req.machine_id] = now
+    _last_email_time[req.machine_id] = now
     message_id = f"apex-{req.machine_id}-{int(now)}"
 
     # Demo: console log only (replace body with Resend call post-hackathon)
@@ -545,6 +631,8 @@ async def get_control() -> ControlState:
 async def simulation_start() -> dict:
     """Starts the simulator as a subprocess (engines 1-5 at rate 1).
     Safe to call even if already running — returns current state.
+    Also resets monotonic RUL floors and urgency tracking so the new
+    simulation starts clean.
     """
     global _sim_process, _sim_running
 
@@ -555,6 +643,23 @@ async def simulation_start() -> dict:
             _sim_process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             _sim_process.kill()
+
+    # FIX: Aggressively kill ANY orphaned replay.py processes in the OS.
+    # Otherwise hot-reloading the API leaves old simulators running, which 
+    # sends massive cycle values and floors RUL to 1 instantly.
+    if sys.platform == "win32":
+        subprocess.run(["powershell", "-Command", "Get-Process python -ErrorAction SilentlyContinue | Where-Object {$_.CommandLine -like '*src.simulator.replay*'} | Stop-Process -Force"], capture_output=True)
+    else:
+        subprocess.run(["pkill", "-f", "src.simulator.replay"], capture_output=True)
+
+    # FIX: Reset ALL per-run state so stale data from previous runs doesn't
+    # poison the new simulation (old abs_cycle values were causing CRITICAL-at-t=0)
+    _previous_rul.clear()
+    _run_start_cycle.clear()     # <-- critical: allows fallback to compute relative cycles
+    _previous_urgency.clear()
+    _buffers.clear()             # <-- critical: clear old sensor windows
+    _latest_frames.clear()       # <-- critical: clear old broadcast frames
+    log.info("[APEX] Full state reset: buffers, frames, RUL floors cleared for new run.")
 
     speed = int(_control.speed_factor)
     log.info(f"[APEX] Starting simulator subprocess at {speed}x...")
@@ -602,6 +707,38 @@ async def simulation_status() -> dict:
         and _sim_process.poll() is None
     )
     return {"sim_running": alive}
+
+
+# ── POST /alert/set-recipient ─────────────────────────────────────────────────
+@app.post("/alert/set-recipient", summary="Set per-machine email alert recipient")
+async def set_alert_recipient(payload: dict) -> dict:
+    """Configure which email address receives CRITICAL alerts for a machine."""
+    machine_id = payload.get("machine_id")
+    email = payload.get("email")
+    if machine_id and email:
+        _alert_recipients[machine_id] = email
+        log.info(f"[APEX] Alert recipient for {machine_id} set to {email}")
+        return {"ok": True, "machine_id": machine_id, "email": email}
+    return {"ok": False, "error": "machine_id and email required"}
+
+
+# ── POST /alert/test ───────────────────────────────────────────────────────────
+@app.post("/alert/test", summary="Send a test email to verify SMTP config")
+async def test_alert(payload: dict) -> dict:
+    """Send a test email to verify SMTP configuration is working."""
+    email = payload.get("email", os.getenv("ALERT_DEFAULT_RECIPIENT", ""))
+    result = send_critical_alert(
+        machine_id="TEST",
+        machine_name="Test Machine",
+        machine_type="Test",
+        component="Test Component",
+        rul_mean=10.0,
+        rul_std=3.0,
+        fail_prob=0.85,
+        recipient=email,
+        recommendation="This is a test alert from APEX. If you received this, email alerts are working correctly.",
+    )
+    return {"ok": result, "sent_to": email}
 
 
 # ── GET /health ───────────────────────────────────────────────────────────────

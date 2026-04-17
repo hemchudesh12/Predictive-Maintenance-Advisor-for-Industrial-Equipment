@@ -1,12 +1,10 @@
-// src/components/HeroChart.tsx
-// Main RUL time-series chart. X-axis shows engine operating time (hours → days → months).
-// At higher replay speeds the time axis advances faster showing days/months per real second.
-
+import { useMemo } from 'react';
 import {
   Area,
   AreaChart,
   CartesianGrid,
   ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,36 +12,16 @@ import {
 } from 'recharts';
 import { useApexStore } from '../store/apexStore';
 import { getPumpName, getComponentName } from '../constants/machines';
-import { LifecycleTimeline } from './LifecycleTimeline';
 import { CounterfactualCard } from './CounterfactualCard';
 
 const CHART_HEIGHT = 240;
 
-// ── Time conversion: 1 CMAPSS cycle ≈ 1 hour of engine operation ──────────────
 function cycleToEngineTime(cycle: number): string {
   if (cycle <= 0) return '0h';
   if (cycle < 48)   return `${cycle}h`;
-  if (cycle < 24 * 14) {
-    const days = Math.round(cycle / 24);
-    return `${days}d`;
-  }
-  if (cycle < 24 * 90) {
-    const weeks = Math.round(cycle / 168);
-    return `${weeks}w`;
-  }
-  const months = (cycle / 720).toFixed(1);
-  return `${months}mo`;
-}
-
-function cycleToFullLabel(cycle: number): string {
-  if (cycle <= 0) return '0 hours';
-  if (cycle < 48)   return `${cycle} hours`;
-  const days = cycle / 24;
-  if (days < 14)    return `${days.toFixed(1)} days`;
-  const weeks = cycle / 168;
-  if (weeks < 13)   return `${weeks.toFixed(1)} weeks`;
-  const months = cycle / 720;
-  return `${months.toFixed(1)} months`;
+  if (cycle < 24 * 14) return `${Math.round(cycle / 24)}d`;
+  if (cycle < 24 * 90) return `${Math.round(cycle / 168)}w`;
+  return `${(cycle / 720).toFixed(1)}mo`;
 }
 
 function CustomTooltip({ active, payload }: { active?: boolean; payload?: any[] }) {
@@ -51,174 +29,169 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: any[] 
   const d = payload[0]?.payload;
   if (!d) return null;
   return (
-    <div className="card" style={{ padding: '10px 14px', minWidth: 180, fontSize: 12 }}>
-      <div className="muted">Cycle {d.cycle} · {cycleToFullLabel(d.cycle)}</div>
-      <div className="flex justify-between gap-3" style={{ marginTop: 4 }}>
-        <span>RUL</span>
-        <span className="mono" style={{ color: 'var(--accent)' }}>{d.rul_mean?.toFixed(1)} cy</span>
+    <div className="card" style={{ padding: '8px 12px', minWidth: 160 }}>
+      <div className="text-micro text-tertiary">Cycle {d.cycle}</div>
+      <div className="flex justify-between" style={{ marginTop: 4 }}>
+        <span className="text-label text-secondary">RUL</span>
+        <span className="mono-body" style={{ color: 'var(--accent)' }}>{d.rul_mean?.toFixed(1)} cy</span>
       </div>
-      <div className="flex justify-between gap-3">
-        <span>95% CI</span>
-        <span className="mono" style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
-          {d.rul_lower_95?.toFixed(1)} – {d.rul_upper_95?.toFixed(1)}
-        </span>
+      <div className="flex justify-between">
+        <span className="text-label text-tertiary">95% CI</span>
+        <span className="mono text-label text-tertiary">±{((d.rul_upper_95 - d.rul_mean) || 0).toFixed(1)}</span>
       </div>
     </div>
   );
 }
 
 export function HeroChart() {
-  const { selectedMachineId, machines, history, speedFactor } = useApexStore();
-  const machine = selectedMachineId ? machines[selectedMachineId] : null;
-  const hist = selectedMachineId ? (history[selectedMachineId] ?? []) : [];
+  const { machines, history, speedFactor, selectedMachineId } = useApexStore();
 
-  // Disable animation at high speeds so chart feels real-time not lagged
-  const animDuration = speedFactor >= 5 ? 0 : 300;
+  const machineId = selectedMachineId || Object.keys(machines)[0];
+  const machine = machines[machineId];
+  const hist = history[machineId] || [];
+
+  const data = useMemo(() => {
+    if (!machine || hist.length === 0) return [];
+    return hist.map(h => ({
+      ...h,
+      ci_band: [h.rul_lower_95, h.rul_upper_95],
+    }));
+  }, [machine, hist]);
 
   if (!machine) {
     return (
-      <div id="hero-chart-section" className="card" style={{ height: CHART_HEIGHT + 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <span className="muted">Select a machine to view RUL chart</span>
+      <div className="card" style={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span className="text-tertiary text-body text-center">Select an engine</span>
       </div>
     );
   }
 
+  const urgencyLvl = machine.urgency.level;
   const warming = machine.buffer_length < 30;
-
-  const strokeColor = machine.urgency.level === 'CRITICAL' ? 'var(--color-critical)'
-    : machine.urgency.level === 'WARNING'  ? 'var(--color-warning)'
-    : machine.urgency.level === 'MONITOR'  ? 'var(--color-monitor)'
-    : 'var(--color-healthy)';
-
-  const data = hist.map(p => ({ ...p }));
-
-  // ── Dynamic Y-axis: tight to data, capped sensibly ────────────────────────
-  let yMax = 140;
-  if (hist.length > 0) {
-    const maxUpper = Math.max(...hist.map(p => p.rul_upper_95));
-    yMax = Math.max(40, Math.min(140, Math.ceil(maxUpper / 10) * 10 + 10));
-  } else {
-    // Use current machine's upper bound as initial scale
-    yMax = Math.max(40, Math.min(140, Math.ceil(machine.rul_upper_95 / 10) * 10 + 20));
-  }
-
-  // ── Display names ─────────────────────────────────────────────────────────
-  const pumpName = getPumpName(machine.machine_id);
-  const componentName = getComponentName(machine.machine_id, machine.component_attribution.component);
+  
+  const strokeColor = urgencyLvl === 'CRITICAL' ? 'var(--critical)' : urgencyLvl === 'WARNING' ? 'var(--warning)' : urgencyLvl === 'MONITOR' ? 'var(--monitor)' : 'var(--healthy)';
+  
+  const pumpName = getPumpName(machineId);
+  const componentName = getComponentName(machineId, machine.component_attribution.primary_component);
+  const yMax = Math.max(160, Math.ceil((data[0]?.rul_upper_95 || 160) / 20) * 20);
 
   return (
-    <div id="hero-chart-section" className="card" style={{ padding: '16px 18px', marginBottom: 'var(--gap-section)' }}>
-      {/* Chart header */}
-      <div className="flex justify-between items-center" style={{ marginBottom: 10 }}>
+    <div className="card flex-col gap-2" style={{ padding: '16px 16px 20px', height: '100%', position: 'relative' }}>
+      
+      {/* ── Chart Header ──────────────────────────────────────────────────────── */}
+      <div className="flex justify-between items-center" style={{ marginBottom: 4 }}>
         <div>
-          <div className="section-title">
+          <div className="text-h2 text-primary">
             {pumpName}
-            <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 400 }}>
+            <span className="text-body text-tertiary" style={{ marginLeft: 6 }}>
               · {componentName}
             </span>
           </div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-            {machine.component_attribution.recommendation}
-          </div>
+          <div className="text-label text-secondary">RUL Trajectory Analysis</div>
         </div>
         <div className="text-right">
-          <div className="metric-value" style={{ color: strokeColor }}>
-            {machine.rul_mean.toFixed(1)} cy
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            ±{machine.rul_std.toFixed(1)} · p(fail30)={Math.round(machine.fail_prob_30 * 100)}%
+          <div className="mono-hero" style={{ color: strokeColor, fontSize: 32 }}>
+            {machine.rul_mean.toFixed(1)} <span style={{ fontSize: 14 }}>cy</span>
           </div>
         </div>
       </div>
 
-      {/* Lifecycle timeline — between header and chart */}
-      {!warming && (
-        <LifecycleTimeline machine={machine} speedFactor={speedFactor} />
-      )}
-
-      {/* Engine time axis label */}
-      {hist.length > 1 && (
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
-          Cycle {machine.current_cycle} ·&nbsp;
-          <span style={{ color: 'var(--text-secondary)' }}>{cycleToFullLabel(machine.current_cycle)} of engine operation</span>
-        </div>
-      )}
-
-      {/* Warmup state */}
       {warming ? (
-        <div style={{ height: CHART_HEIGHT, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-          <div className="muted" style={{ fontSize: 13 }}>
+        <div className="flex-col items-center justify-center" style={{ flex: 1, gap: 12 }}>
+          <div className="text-secondary text-body text-center">
             ⏳ Warming up — {machine.buffer_length}/30 samples collected
-          </div>
-          <div className="progress-bar" style={{ width: '60%' }}>
-            <div className="progress-fill" style={{ width: `${(machine.buffer_length / 30) * 100}%` }} />
           </div>
         </div>
       ) : hist.length < 2 ? (
-        <div style={{ height: CHART_HEIGHT, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <span className="muted">Collecting chart data…</span>
+        <div className="flex items-center justify-center" style={{ flex: 1 }}>
+          <span className="text-secondary text-body text-center">Collecting chart data…</span>
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
-          <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 20, left: -10 }}>
-            <defs>
-              <linearGradient id="rulGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor={strokeColor} stopOpacity={0.25} />
-                <stop offset="95%" stopColor={strokeColor} stopOpacity={0.02} />
-              </linearGradient>
-              <linearGradient id="ciGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor={strokeColor} stopOpacity={0.08} />
-                <stop offset="95%" stopColor={strokeColor} stopOpacity={0.01} />
-              </linearGradient>
-            </defs>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 10, right: 10, bottom: 20, left: -20 }}>
+              <defs>
+                <linearGradient id="ciGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={strokeColor} stopOpacity={0.08} />
+                  <stop offset="100%" stopColor={strokeColor} stopOpacity={0.01} />
+                </linearGradient>
+                <linearGradient id="failGrad" x1="0" y1="1" x2="0" y2="0">
+                  <stop offset="0%" stopColor="rgba(239,68,68,0.12)" />
+                  <stop offset="100%" stopColor="rgba(239,68,68,0.0)" />
+                </linearGradient>
+                <filter id="glow">
+                  <feGaussianBlur stdDeviation="3.5" result="coloredBlur"/>
+                  <feMerge>
+                    <feMergeNode in="coloredBlur"/>
+                    <feMergeNode in="SourceGraphic"/>
+                  </feMerge>
+                </filter>
+              </defs>
 
-            <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="3 3" />
+              <CartesianGrid stroke="rgba(255,255,255,0.03)" strokeDasharray="4 4" vertical={false} />
 
-            <XAxis
-              dataKey="cycle"
-              stroke="var(--text-muted)"
-              tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-              tickFormatter={cycleToEngineTime}
-              label={{
-                value: 'Engine operating time  (1 cycle ≈ 1 h)',
-                position: 'insideBottomRight',
-                offset: -5,
-                style: { fontSize: 9, fill: 'var(--text-muted)' },
+              <XAxis dataKey="cycle" stroke="var(--border-strong)" tick={{ fontSize: 10, fill: 'var(--text-tertiary)' }} tickFormatter={cycleToEngineTime} />
+              <YAxis domain={[0, yMax]} stroke="none" tick={{ fontSize: 10, fill: 'var(--text-tertiary)' }} />
+              
+              <Tooltip content={<CustomTooltip />} />
+
+              {/* Fail zone shading */}
+              <ReferenceArea y1={0} y2={30} fill="url(#failGrad)" />
+              <ReferenceLine y={30} stroke="var(--critical)" strokeDasharray="3 3" strokeOpacity={0.3} 
+                label={{ value: 'FAIL ZONE', position: 'insideBottomLeft', style: { fontSize: 10, fill: 'var(--critical)', opacity: 0.6 } }} />
+
+              {/* Confidence interval band */}
+              <Area dataKey="ci_band" stroke="none" fill="url(#ciGrad)" isAnimationActive={false} />
+
+              {/* Main RUL Line */}
+              <Area 
+                type="monotone" 
+                dataKey="rul_mean" 
+                stroke={strokeColor} 
+                strokeWidth={2} 
+                fill="none" 
+                isAnimationActive={false}
+                style={{ filter: 'url(#glow)' }}
+                dot={false}
+                activeDot={{ r: 4, fill: 'var(--bg-surface-1)', stroke: strokeColor, strokeWidth: 2 }}
+              />
+
+              {/* "Now" Indicator at the end of the line */}
+              <ReferenceLine 
+                x={data[data.length - 1].cycle} 
+                stroke="var(--accent)" 
+                strokeDasharray="2 4" 
+                strokeOpacity={0.5} 
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+          
+          {/* Animated intersection dot */}
+          {data.length > 0 && (
+            <div 
+              style={{
+                position: 'absolute',
+                top: 0, bottom: 0, right: 0, left: 0,
+                pointerEvents: 'none'
               }}
-            />
-            <YAxis
-              stroke="var(--text-muted)"
-              tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-              domain={[0, yMax]}
-              label={{ value: 'RUL (cy)', angle: -90, position: 'insideLeft', offset: 14, style: { fontSize: 9, fill: 'var(--text-muted)' } }}
-            />
-
-            <Tooltip content={<CustomTooltip />} />
-
-            {/* 30-cycle fail zone line */}
-            <ReferenceLine y={30} stroke="var(--color-critical)" strokeDasharray="4 3" strokeOpacity={0.65}
-              label={{ value: 'FAIL ZONE', position: 'insideTopLeft', style: { fontSize: 9, fill: 'var(--color-critical)', opacity: 0.8 } }}
-            />
-
-            {/* CI band */}
-            <Area dataKey="rul_upper_95" stroke="none" fill="url(#ciGrad)" animationDuration={animDuration} />
-            <Area dataKey="rul_lower_95" stroke="none" fill="var(--apex-bg)" animationDuration={animDuration} />
-
-            {/* Main RUL line */}
-            <Area
-              dataKey="rul_mean"
-              stroke={strokeColor}
-              strokeWidth={2}
-              fill="url(#rulGrad)"
-              dot={false}
-              activeDot={{ r: 4, fill: strokeColor, stroke: 'var(--apex-bg)', strokeWidth: 2 }}
-              animationDuration={animDuration}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+            >
+              <div 
+                className="dot"
+                style={{
+                  position: 'absolute',
+                  right: 9, // roughly the chart margin right padding
+                  top: `calc(100% - ${(data[data.length-1].rul_mean / yMax) * 100}%)`,
+                  width: 8, height: 8,
+                  marginTop: -16, // offset baseline adjust
+                  background: 'var(--accent)',
+                  boxShadow: 'var(--accent-glow)',
+                  animation: 'pulse-live 1.5s ease-in-out infinite'
+                }}
+              />
+            </div>
+          )}
+        </div>
       )}
-
-      {/* CRITICAL counterfactual cost card */}
       <CounterfactualCard />
     </div>
   );

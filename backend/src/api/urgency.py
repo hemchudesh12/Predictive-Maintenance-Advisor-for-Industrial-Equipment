@@ -24,14 +24,14 @@ from typing import TypedDict
 _LEVEL_COLORS: dict[str, str] = {
     "CRITICAL": "#FF2D2D",
     "WARNING":  "#FF9500",
-    "MONITOR":  "#FFD60A",
+    "MONITOR":  "#3b82f6", # Blue
     "HEALTHY":  "#34C759",
 }
 
 _LEVEL_BG: dict[str, str] = {
     "CRITICAL": "#501313",
     "WARNING":  "#412402",
-    "MONITOR":  "#3D3300",
+    "MONITOR":  "#1e3a8a", # Dark blue
     "HEALTHY":  "#173404",
 }
 
@@ -74,15 +74,15 @@ def classify(rul_mean: float, rul_std: float) -> UrgencyResult:
     lower = rul_mean - 1.645 * sigma    # 5th percentile
     fail_prob = _norm_cdf(30.0, rul_mean, sigma)  # P(RUL ≤ 30)
 
-    # ── Classification rules ──────────────────────────────────────────────────
-    if fail_prob > 0.70 or lower < 10:
-        level = "CRITICAL"
-    elif fail_prob > 0.40 or lower < 30:
-        level = "WARNING"
-    elif fail_prob > 0.15 or rul_mean < 60:
-        level = "MONITOR"
-    else:
+    # ── Classification rules (FIX 2) ──────────────────────────────────────────
+    if rul_mean > 80:
         level = "HEALTHY"
+    elif rul_mean > 40:
+        level = "MONITOR"
+    elif rul_mean > 15:
+        level = "WARNING"
+    else:
+        level = "CRITICAL"
 
     # ── Composite urgency score (0 = healthy, 1 = certain failure) ────────────
     # Smoothly interpolates: healthy≈0, critical→1

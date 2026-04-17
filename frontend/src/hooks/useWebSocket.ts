@@ -8,7 +8,7 @@
 import { useEffect, useRef } from 'react';
 import { useApexStore } from '../store/apexStore';
 import type { StreamFrame } from '../types/apex';
-import { getPumpName } from '../constants/machines';
+import { getPumpName, getMachineConfig, getComponentCost } from '../constants/machines';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const WS_URL = API_BASE
@@ -61,15 +61,17 @@ export function useWebSocket() {
     mountedRef.current = true;
 
     // ── Voice alert (pure function, no closure deps) ───────────────────────
-    // Fires only on CRITICAL transition — once per machine per CRITICAL event.
-    // Respects the voiceAlertMuted flag set by the user via the Header button.
+    // FIX 4: Voice is now handled by useVoiceAlert hook (repeating every 15s).
+    // Single fire here is kept as immediate feedback for non-CRITICAL transitions.
     function fireVoice(machineId: string, level: string) {
       if (level !== 'CRITICAL') return;
+      // The repeating voice is managed by useVoiceAlert.
+      // This single-shot fires only if somehow useVoiceAlert hasn't started yet.
       if (!('speechSynthesis' in window)) return;
-      if (useApexStore.getState().voiceAlertMuted) return; // user silenced it
-      const pumpName = getPumpName(machineId);
+      if (useApexStore.getState().voiceAlertMuted) return;
+      const cfg = getMachineConfig(machineId);
       const utt = new SpeechSynthesisUtterance(
-        `Critical alert. ${pumpName} requires immediate attention.`
+        `Critical alert. ${cfg.displayName} requires immediate attention.`
       );
       utt.rate = 0.9;
       utt.pitch = 0.8;
@@ -100,9 +102,12 @@ export function useWebSocket() {
         .then(r => r.json())
         .then(snap => {
           if (!mountedRef.current) return;
-          // Only push snapshot data if the simulation is live
-          if (!useApexStore.getState().simRunning) return;
-          if (snap.machines?.length > 0) {
+          // BUG 1 FIX: Accept snapshot if:
+          //   a) simulation is running according to store, OR
+          //   b) machines state is empty (page reload — need to repopulate display)
+          const state = useApexStore.getState();
+          const shouldApply = state.simRunning || Object.keys(state.machines).length === 0;
+          if (shouldApply && snap.machines?.length > 0) {
             const frame: StreamFrame = {
               timestamp: snap.timestamp ?? new Date().toISOString(),
               sequence_id: 0,
@@ -111,6 +116,11 @@ export function useWebSocket() {
               backend_health: snap.backend_health ?? { p99_latency_ms: 0, uptime_sec: 0, machine_count: 0 },
             };
             useApexStore.getState().applyFrame(frame);
+            // If we got machines from snapshot and simRunning is false, set it true
+            // (means sim was running before page reload)
+            if (!state.simRunning) {
+              useApexStore.getState().setSimRunning(true);
+            }
             persistMachines(useApexStore.getState().machines);
           }
           useApexStore.getState().setFallbackMode(snap.fallback_mode ?? false);
@@ -154,8 +164,12 @@ export function useWebSocket() {
       ws.onmessage = (ev) => {
         if (!mountedRef.current) return;
 
-        // GATE: discard live frames when simulation is stopped — values stay frozen
-        if (!useApexStore.getState().simRunning) return;
+        // BUG 1 FIX: Only gate when sim was explicitly stopped AND we already
+        // have machine data (freeze-values behavior). Never gate during warmup
+        // (machines empty) or initial page load (simRunning not yet synced).
+        const currentState = useApexStore.getState();
+        const hasData = Object.keys(currentState.machines).length > 0;
+        if (!currentState.simRunning && hasData) return;  // freeze: sim stopped, keep last values
 
         try {
           const data = JSON.parse(ev.data as string);
@@ -180,6 +194,23 @@ export function useWebSocket() {
             const curr = machine.urgency.level;
             if (curr !== prev) fireVoice(machine.machine_id, curr);
             voiceRef.current[machine.machine_id] = curr;
+
+            // Feature 5: Compute savings on CRITICAL transition
+            if (curr === 'CRITICAL' && prev !== 'CRITICAL') {
+              const cfg = getMachineConfig(machine.machine_id);
+              const unplannedCost = cfg.costPerCycle * 40;
+              const plannedCost = getComponentCost(cfg.component);
+              const netSavings = unplannedCost - plannedCost;
+              useApexStore.getState().addSavingsEvent({
+                machineId: machine.machine_id,
+                machineName: cfg.displayName,
+                component: cfg.component,
+                costAvoided: unplannedCost,
+                costOfIntervention: plannedCost,
+                netSavings,
+                timestamp: Date.now(),
+              });
+            }
           }
         } catch {
           // Malformed frame — silently ignore

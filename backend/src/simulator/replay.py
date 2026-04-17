@@ -39,7 +39,8 @@ _FEATURE_COLS: list[str] = [
 ]
 
 # Stagger: each slot index → fraction into the lifecycle to start at
-_STAGGER_OFFSETS = [0.0, 0.20, 0.40, 0.60, 0.80]
+# (FIX 1) Start all engines very close to 0 to ensure they are initally Healthy
+_STAGGER_OFFSETS = [0.0, 0.01, 0.02, 0.03, 0.04]
 
 # Speed polling
 _cached_speed: float = 1.0

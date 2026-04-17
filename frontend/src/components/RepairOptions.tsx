@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useApexStore } from '../store/apexStore';
 import { getMachineProfile } from './MachineProfile';
+import { getMachineConfig, getComponentCost } from '../constants/machines';
 
 interface RepairOption {
   id: string;
@@ -18,16 +19,6 @@ interface RepairOption {
   requiresShutdown: boolean;
 }
 
-function getComponentCost(component: string): number {
-  const costs: Record<string, number> = {
-    'Bearing': 45000,
-    'Seal': 35000,
-    'Impeller': 85000,
-    'Motor': 150000,
-    'Gearbox': 120000,
-  };
-  return costs[component] || 50000;
-}
 
 function getComponentLifeExtension(component: string): number {
   const extensions: Record<string, number> = {
@@ -65,8 +56,9 @@ export const RepairOptions: React.FC<{ machineId: string }> = ({ machineId }) =>
     const profile = getMachineProfile(machineId);
     if (!profile) return [];
 
-    // Extract root cause component or fallback
-    const component = 'Bearing'; 
+    // Use machine-specific component from config
+    const machineConfig = getMachineConfig(machineId);
+    const component = machineConfig.component;
     const currentAge = parseFloat(profile.currentAge);
     const expectedLifespan = parseFloat(profile.expectedLifespan);
     const remainingLifeYears = expectedLifespan - currentAge;

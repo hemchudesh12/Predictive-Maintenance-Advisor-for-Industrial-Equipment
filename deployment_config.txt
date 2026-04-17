@@ -1,0 +1,11 @@
+1. PROJECT_ROOT       = e:\Tensor'26\APEX
+2. BACKEND_DIR        = {PROJECT_ROOT}\backend
+3. FRONTEND_DIR       = {PROJECT_ROOT}\frontend
+4. MODEL_CHECKPOINT   = {PROJECT_ROOT}\checkpoints\cnn_bilstm_fd001.pt
+5. SIMULATOR_DIR      = {PROJECT_ROOT}\backend\src\simulator
+6. FASTAPI_ENTRYPOINT = src.api.main:app
+
+11. Frontend framework: is it Vite + React?             yes
+12. Is your FastAPI app instance literally named `app`? yes
+13. Is your WebSocket endpoint path "/stream"?          yes
+14. Which OS is your deployment laptop?                 Windows native
