@@ -21,7 +21,7 @@ const SENSOR_DISPLAY_NAMES: Record<string, string> = {
 interface SensorContribution {
   sensor: string;
   zScore: number;
-  direction: 'rising' | 'falling';
+  direction: 'rising' | 'falling' | string;
   displayName: string;
 }
 

@@ -74,7 +74,7 @@ export function MachineCard({ machine, index }: Props) {
 
       {/* Row 2: Type + Component */}
       <div className="text-label text-secondary" style={{ paddingLeft: 22 }}>
-        {config?.type} · {getComponentName(machine.machine_id)}
+        {config?.type} · {getComponentName(machine.machine_id, machine.component_attribution.component)}
       </div>
 
       {/* Row 3: Main RUL metric */}

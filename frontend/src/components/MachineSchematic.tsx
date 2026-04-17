@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useApexStore } from '../store/apexStore';
 import { getMachineConfig } from '../constants/machines';
@@ -11,8 +10,6 @@ function useSchematicAnimations(machine: any) {
   
   // CMAPSS mapping approximation from 21 sensors
   const heatZ = zScores.slice(0, 4).reduce((a:number,b:number)=>a+Math.abs(b),0) / 4 || 0;
-  const flowZ = zScores.slice(4, 9).reduce((a:number,b:number)=>a+Math.abs(b),0) / 5 || 0;
-  const vibZ  = zScores.slice(9, 14).reduce((a:number,b:number)=>a+Math.abs(b),0) / 5 || 0;
 
   // Rotational duration mappings
   const rotateDur = urgency === 'CRITICAL' ? 0.3 : urgency === 'WARNING' ? 0.8 : urgency === 'MONITOR' ? 1.5 : 2.5;

@@ -2,7 +2,6 @@
 // Feature 5 — Fleet-wide savings tracker.
 // Appears in the header/main area once at least one early detection has occurred.
 
-import React from 'react';
 import { useApexStore } from '../store/apexStore';
 
 export function SavingsTracker() {

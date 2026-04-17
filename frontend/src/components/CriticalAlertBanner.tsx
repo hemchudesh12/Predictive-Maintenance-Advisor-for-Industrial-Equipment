@@ -2,7 +2,6 @@
 // FIX 4 — Pulsing banner for unacknowledged critical alerts.
 // Shows one row per machine with an Acknowledge button that silences the voice.
 
-import React from 'react';
 import { useApexStore } from '../store/apexStore';
 
 export function CriticalAlertBanner() {

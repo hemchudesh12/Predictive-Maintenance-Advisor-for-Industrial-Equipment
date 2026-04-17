@@ -14,7 +14,7 @@ import { useApexStore } from '../store/apexStore';
 import { getPumpName, getComponentName } from '../constants/machines';
 import { CounterfactualCard } from './CounterfactualCard';
 
-const CHART_HEIGHT = 240;
+
 
 function cycleToEngineTime(cycle: number): string {
   if (cycle <= 0) return '0h';
@@ -44,7 +44,7 @@ function CustomTooltip({ active, payload }: { active?: boolean; payload?: any[] 
 }
 
 export function HeroChart() {
-  const { machines, history, speedFactor, selectedMachineId } = useApexStore();
+  const { machines, history, selectedMachineId } = useApexStore();
 
   const machineId = selectedMachineId || Object.keys(machines)[0];
   const machine = machines[machineId];
@@ -72,7 +72,7 @@ export function HeroChart() {
   const strokeColor = urgencyLvl === 'CRITICAL' ? 'var(--critical)' : urgencyLvl === 'WARNING' ? 'var(--warning)' : urgencyLvl === 'MONITOR' ? 'var(--monitor)' : 'var(--healthy)';
   
   const pumpName = getPumpName(machineId);
-  const componentName = getComponentName(machineId, machine.component_attribution.primary_component);
+  const componentName = getComponentName(machineId, machine.component_attribution.component);
   const yMax = Math.max(160, Math.ceil((data[0]?.rul_upper_95 || 160) / 20) * 20);
 
   return (

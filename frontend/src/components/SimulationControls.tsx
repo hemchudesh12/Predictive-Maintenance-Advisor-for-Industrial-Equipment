@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useApexStore } from '../store/apexStore';
-import { Play, Square } from 'lucide-react';
+import { Play } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const LS_KEY = 'apex_simulation_running';

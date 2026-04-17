@@ -8,7 +8,7 @@
 import { useEffect, useRef } from 'react';
 import { useApexStore } from '../store/apexStore';
 import type { StreamFrame } from '../types/apex';
-import { getPumpName, getMachineConfig, getComponentCost } from '../constants/machines';
+import { getMachineConfig, getComponentCost } from '../constants/machines';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '';
 const WS_URL = API_BASE

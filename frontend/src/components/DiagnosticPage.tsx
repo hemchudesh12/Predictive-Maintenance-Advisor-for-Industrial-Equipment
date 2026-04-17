@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApexStore } from '../store/apexStore';
-import { MachineAnimation } from './MachineAnimation';
+import { MachineSchematic } from './MachineSchematic';
 import { HeroChart } from './HeroChart';
 import { RootCauseAnalysis } from './RootCauseAnalysis';
 import { MachineProfile } from './MachineProfile';
@@ -114,7 +114,7 @@ export const DiagnosticPage: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) 2fr', gap: 'var(--gap-section)', alignItems: 'stretch' }}>
         <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 320 }}>
           <div className="section-title" style={{ alignSelf: 'flex-start', width: '100%' }}>REAL-TIME TELEMETRY</div>
-          <MachineAnimation machine={machine} config={machineConfig} />
+          <MachineSchematic />
           {/* Email alert config per machine (FIX 3) */}
           <AlertConfig machineId={selectedMachineId} />
         </div>
@@ -126,8 +126,8 @@ export const DiagnosticPage: React.FC = () => {
 
       {/* Middle section: Root Cause & Profiling */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--gap-section)' }}>
-        <RootCauseAnalysis machineId={selectedMachineId} />
-        <MachineProfile machineId={selectedMachineId} />
+        <RootCauseAnalysis />
+        <MachineProfile />
       </div>
 
       {/* Bottom section: Repair Options & Similar Failures */}

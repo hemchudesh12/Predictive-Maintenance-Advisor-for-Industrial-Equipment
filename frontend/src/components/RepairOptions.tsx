@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import { useApexStore } from '../store/apexStore';
-import { getMachineProfile } from './MachineProfile';
 import { getMachineConfig, getComponentCost } from '../constants/machines';
 
 interface RepairOption {
@@ -53,14 +52,12 @@ export const RepairOptions: React.FC<{ machineId: string }> = ({ machineId }) =>
   const options = useMemo(() => {
     if (!machine) return [];
     
-    const profile = getMachineProfile(machineId);
-    if (!profile) return [];
-
-    // Use machine-specific component from config
     const machineConfig = getMachineConfig(machineId);
+    if (!machineConfig) return [];
+    
     const component = machineConfig.component;
-    const currentAge = parseFloat(profile.currentAge);
-    const expectedLifespan = parseFloat(profile.expectedLifespan);
+    const currentAge = machineConfig.currentAge;
+    const expectedLifespan = machineConfig.expectedLifespan;
     const remainingLifeYears = expectedLifespan - currentAge;
 
     const opts: RepairOption[] = [];
@@ -86,11 +83,11 @@ export const RepairOptions: React.FC<{ machineId: string }> = ({ machineId }) =>
       rank: 2,
       title: 'Full pump overhaul',
       description: `Complete disassembly, inspection, and replacement of all wear parts. Resets all components to baseline.`,
-      cost: getOverhaulCost(profile.power),
-      costDisplay: formatINR(getOverhaulCost(profile.power)),
+      cost: getOverhaulCost(machineConfig.power),
+      costDisplay: formatINR(getOverhaulCost(machineConfig.power)),
       lifeExtension: expectedLifespan * 0.7,
       newExpectedLife: expectedLifespan * 0.7,
-      costPerYear: getOverhaulCost(profile.power) / (expectedLifespan * 0.7),
+      costPerYear: getOverhaulCost(machineConfig.power) / (expectedLifespan * 0.7),
       riskIfIgnored: 'Multiple component failures likely within 1-2 years. Cascading damage risk.',
       recommendation: currentAge > expectedLifespan * 0.5 ? 'GOOD' : 'ACCEPTABLE',
       timeToImplement: '2-3 days',
@@ -102,11 +99,11 @@ export const RepairOptions: React.FC<{ machineId: string }> = ({ machineId }) =>
       rank: 3,
       title: 'Replace entire pump unit',
       description: `Install new pump of same specification. Old unit decommissioned or rebuilt as spare.`,
-      cost: getReplacementCost(profile.power),
-      costDisplay: formatINR(getReplacementCost(profile.power)),
+      cost: getReplacementCost(machineConfig.power),
+      costDisplay: formatINR(getReplacementCost(machineConfig.power)),
       lifeExtension: expectedLifespan,
       newExpectedLife: expectedLifespan,
-      costPerYear: getReplacementCost(profile.power) / expectedLifespan,
+      costPerYear: getReplacementCost(machineConfig.power) / expectedLifespan,
       riskIfIgnored: 'Current pump reaches end-of-life. Increasing maintenance burden.',
       recommendation: currentAge > expectedLifespan * 0.7 ? 'GOOD' : 'NOT RECOMMENDED',
       timeToImplement: '1-2 weeks',
