@@ -1,10 +1,10 @@
 {
   "dataset": "FD001",
-  "rmse": 15.391,
-  "nasa_score": 444.0692,
-  "f1_30cycle": 0.875,
-  "mae": 11.1933,
+  "rmse": 20.7698,
+  "nasa_score": 2066.0117,
+  "f1_30cycle": 0.8936,
+  "mae": 14.8163,
   "n_test_units": 100,
   "checkpoint": "checkpoints\\cnn_bilstm_fd001.pt",
-  "training_time_sec": 107.23
+  "training_time_sec": 80.73
 }
